@@ -174,10 +174,14 @@ function initModals() {
   const settingsDialog = document.getElementById("settingsDialog");
   const batchDialog = document.getElementById("batchDialog");
 
-  document.getElementById("openSettingsModalBtn").addEventListener("click", () => {
+  const openSettings = () => {
     document.getElementById("core365UrlInput").value = customCore365Url;
     settingsDialog.showModal();
-  });
+  };
+
+  document.getElementById("openSettingsModalBtn").addEventListener("click", openSettings);
+  document.getElementById("apiStatusBadge").addEventListener("click", openSettings);
+  document.getElementById("apiStatusBadge").style.cursor = "pointer";
 
   document.getElementById("openBatchModalBtn").addEventListener("click", () => {
     batchDialog.showModal();
@@ -207,7 +211,7 @@ function initModals() {
     }
     settingsDialog.close();
     await checkApiStatus();
-    showToast("Settings saved!");
+    showToast("Settings saved locally!");
   });
 
   document.getElementById("runBatchBtn").addEventListener("click", handleBatchRun);
@@ -222,8 +226,15 @@ async function checkApiStatus() {
       badge.textContent = `✓ Gemini API Active (${data.masked_key})`;
       badge.className = "status-pill status-ok";
     } else {
-      badge.textContent = "⚡ Free Recon + Deep-Link Mode (Add Gemini Key in Settings)";
+      badge.textContent = "⚡ Free Recon Mode (Click to Add Your Gemini Key)";
       badge.className = "status-pill status-warn";
+      if (!localStorage.getItem("proptrace_onboarded")) {
+        localStorage.setItem("proptrace_onboarded", "1");
+        const settingsDialog = document.getElementById("settingsDialog");
+        if (settingsDialog && !settingsDialog.open) {
+          settingsDialog.showModal();
+        }
+      }
     }
   } catch (err) {
     console.error(err);
@@ -354,55 +365,104 @@ function renderDossier(dossier) {
   const sec = document.getElementById("dossierSection");
   sec.hidden = false;
 
+  const valInfo = dossier.assessed_value_and_acres ? ` • ${dossier.assessed_value_and_acres}` : "";
   document.getElementById("dossierSubtitle").textContent =
-    `${dossier.normalized_address} • ${dossier.property_type} Property`;
+    `${dossier.normalized_address} • ${dossier.property_type} Property${valInfo}`;
   document.getElementById("confidenceBadge").textContent = dossier.overall_confidence;
   document.getElementById("resDecisionMaker").textContent = dossier.primary_decision_maker || "—";
+  document.getElementById("resDecisionMakerRole").textContent = dossier.decision_maker_role_and_authority || "";
   document.getElementById("resPrimaryPhone").textContent = dossier.primary_phone || "Use Stage 3 Free Links Below";
+  document.getElementById("resPrimaryPhoneType").textContent =
+    dossier.primary_phone_type || "📱 Personal Cell / Direct Owner Line";
   document.getElementById("resOwnerOfRecord").textContent = dossier.owner_of_record || "—";
   document.getElementById("resMailingAddress").textContent = dossier.tax_mailing_address || dossier.normalized_address;
   document.getElementById("resParcelApn").textContent = `APN: ${dossier.parcel_apn || "See Regrid/LandGlide/Land.com"}`;
   document.getElementById("resRegisteredAgent").textContent =
-    dossier.registered_agent_name ? `Registered Agent / Officer: ${dossier.registered_agent_name}` : "";
+    dossier.registered_agent_name ? `Officers / Agent: ${dossier.registered_agent_name}` : "";
   document.getElementById("resEntityBadge").textContent =
     dossier.is_corporate_or_llc
       ? `Corporate/LLC/Trust Entity (${dossier.state_of_formation || "US"})`
       : "Individual / Direct Ownership";
 
-  // Contacts Breakdown
+  // Portfolio Summary Box
+  const pCount = dossier.portfolio_count || 1;
+  document.getElementById("resPortfolioCount").textContent =
+    `${pCount} ${pCount === 1 ? "Property" : "Properties"} Owned`;
+  document.getElementById("resPortfolioValue").textContent =
+    dossier.portfolio_total_value || dossier.assessed_value_and_acres || "See Portfolio Below";
+
+  // Ownership Verification Chain
+  document.getElementById("resStructureType").textContent =
+    dossier.ownership_structure_type || "Verified Ownership";
+  document.getElementById("resVerificationProof").textContent =
+    dossier.decision_maker_verification_proof || "";
+  const layersEl = document.getElementById("shellLayersList");
+  layersEl.innerHTML = (dossier.shell_layers_pierced || [])
+    .map((layer) => `<span class="shell-layer-step">${escapeHtml(layer)}</span>`)
+    .join("");
+
+  // Contacts Breakdown (Personal Cell First)
   const contactsContainer = document.getElementById("contactsList");
   contactsContainer.innerHTML = "";
   const contacts = dossier.contacts && dossier.contacts.length ? dossier.contacts : [];
 
-  contacts.forEach((c) => {
+  contacts.forEach((c, idx) => {
     const card = document.createElement("div");
-    card.className = "contact-card";
+    card.className = `contact-card ${c.is_primary_decision_maker || idx === 0 ? "primary-contact-card" : ""}`;
     const phonesHtml = (c.phones && c.phones.length)
       ? c.phones
           .map(
             (p) => `
-          <div class="phone-item">
+          <div class="phone-item ${p.is_personal_cell ? "personal-cell-item" : ""}">
             <div>
               <strong>${escapeHtml(p.number)}</strong>
-              <span class="subtitle">(${escapeHtml(p.phone_type)} • ${escapeHtml(p.carrier_or_source)})</span>
+              ${p.is_personal_cell ? `<span class="cell-tag">📱 PERSONAL CELL / DIRECT</span>` : ""}
+              <div class="subtitle">${escapeHtml(p.phone_type)} • ${escapeHtml(p.carrier_or_source)}</div>
             </div>
             <button type="button" class="copy-mini-btn" onclick="navigator.clipboard.writeText('${escapeHtml(p.number)}'); showToast('Copied phone!')">Copy</button>
           </div>`
           )
           .join("")
-      : `<div class="phone-item"><span class="subtitle">Click TruePeopleSearch or FastPeopleSearch below for instant free wireless/landline numbers</span></div>`;
+      : `<div class="phone-item"><span class="subtitle">Click TruePeopleSearch or FastPeopleSearch below for instant free wireless/cell numbers</span></div>`;
 
     card.innerHTML = `
       <div class="contact-card-header">
-        <strong>${escapeHtml(c.full_name)}</strong>
-        <span class="badge">${escapeHtml(c.role)}</span>
+        <strong>${escapeHtml(c.full_name)} ${c.age_or_demographics ? `<small class="subtitle">(${escapeHtml(c.age_or_demographics)})</small>` : ""}</strong>
+        <span class="badge ${c.is_primary_decision_maker || idx === 0 ? "badge-success" : ""}">${escapeHtml(c.role)}</span>
       </div>
-      <div class="subtitle">📍 ${escapeHtml(c.mailing_or_home_address || dossier.normalized_address)}</div>
-      ${c.emails && c.emails.length ? `<div class="subtitle">✉️ ${escapeHtml(c.emails.join(", "))}</div>` : ""}
+      ${c.verification_evidence ? `<div class="contact-evidence">✓ ${escapeHtml(c.verification_evidence)}</div>` : ""}
+      <div class="subtitle">📍 Tax / Home Address: ${escapeHtml(c.mailing_or_home_address || dossier.normalized_address)}</div>
+      ${c.emails && c.emails.length ? `<div class="subtitle">✉️ Email(s): ${escapeHtml(c.emails.join(", "))}</div>` : ""}
+      ${c.relatives_or_associates && c.relatives_or_associates.length ? `<div class="subtitle">👥 Associated Co-Owners / Relatives: ${escapeHtml(c.relatives_or_associates.join(", "))}</div>` : ""}
       <div class="phone-list">${phonesHtml}</div>
     `;
     contactsContainer.appendChild(card);
   });
+
+  // Portfolio Section
+  document.getElementById("portfolioHeaderCount").textContent = pCount;
+  document.getElementById("resPortfolioSummary").textContent =
+    dossier.portfolio_summary || "";
+  const portGrid = document.getElementById("portfolioPropertiesGrid");
+  portGrid.innerHTML = "";
+  const otherProps = dossier.other_properties || [];
+  if (otherProps.length) {
+    otherProps.forEach((op) => {
+      const pCard = document.createElement("div");
+      pCard.className = `portfolio-card ${op.is_owner_homestead ? "homestead-card" : ""}`;
+      pCard.innerHTML = `
+        <div class="portfolio-card-top">
+          <span class="portfolio-addr">${escapeHtml(op.address)}</span>
+          ${op.is_owner_homestead ? `<span class="cell-tag">🏠 Owner Homestead</span>` : `<span class="portfolio-meta">APN: ${escapeHtml(op.parcel_apn)}</span>`}
+        </div>
+        <div class="portfolio-meta">${escapeHtml(op.city_state)} • Held by: <strong>${escapeHtml(op.holding_entity)}</strong></div>
+        <div class="portfolio-meta">${escapeHtml(op.assessed_value_or_details)}</div>
+      `;
+      portGrid.appendChild(pCard);
+    });
+  } else {
+    portGrid.innerHTML = `<div class="portfolio-card"><span class="portfolio-meta">Target property is the primary parcel on record for this entity/address.</span></div>`;
+  }
 
   // Next Steps
   const stepsUl = document.getElementById("recommendedStepsList");
@@ -425,8 +485,8 @@ function renderDefaultLaunchpad() {
       { name: "B2BHint (Business Data Platform)", badge: "Bookmark #6", source_type: "screenshot", description: "Business Data Platform, Company Search, API & Network", url: "https://b2bhint.com/en", copy_text: "" },
     ],
     people_tools: [
-      { name: "TruePeopleSearch", badge: "Bookmark #3", source_type: "screenshot", description: "100% Free People Search & Reverse Address/Phone Lookup", url: "https://www.truepeoplesearch.com/", copy_text: "" },
-      { name: "FastPeopleSearch", badge: "Bookmark #2", source_type: "screenshot", description: "Free People Search & Reverse Phone/Address Lookup", url: "https://www.fastpeoplesearch.com/", copy_text: "" },
+      { name: "TruePeopleSearch", badge: "Bookmark #3", source_type: "screenshot", description: "100% Free People Search & Personal Cell Phone Lookup", url: "https://www.truepeoplesearch.com/", copy_text: "" },
+      { name: "FastPeopleSearch", badge: "Bookmark #2", source_type: "screenshot", description: "Free People Search & Personal Wireless Lookup", url: "https://www.fastpeoplesearch.com/", copy_text: "" },
       { name: "Spokeo", badge: "Bookmark #1", source_type: "screenshot", description: "People Search | White Pages | Reverse Phone Lookup", url: "https://www.spokeo.com/", copy_text: "" },
       { name: "Core365 | via & Google Gemini", badge: "Bookmarks #7 & #10", source_type: "screenshot", description: "AI Agent synthesis & CRM outreach portal", url: "https://gemini.google.com/app", copy_text: "" },
     ],
@@ -487,7 +547,7 @@ function handleCopyGeminiPrompt() {
   const city = document.getElementById("cityInput").value.trim();
   const state = document.getElementById("stateInput").value.trim();
   const known = document.getElementById("knownOwnerInput").value.trim();
-  const prompt = `Find the property owner of record and pierce any LLC/Corporation for ${street}, ${city}, ${state} ${known ? `(Entity hint: ${known})` : ""}. Check county tax assessor records, OpenCorporates, CorporationWiki, B2BHint, TruePeopleSearch, and FastPeopleSearch to identify the human managing member/owner, their mailing address, and their phone numbers.`;
+  const prompt = `Find the true beneficial property owner of record, pierce any multi-layered LLC/Corporation (or identify the building-care manager if an HOA/group), list all other properties they own, and find their personal cell phone number for ${street}, ${city}, ${state} ${known ? `(Entity hint: ${known})` : ""}.`;
   navigator.clipboard.writeText(prompt);
   window.open("https://gemini.google.com/app", "_blank");
   showToast("Skip-trace prompt copied! Press Ctrl+V in Google Gemini.");
@@ -514,6 +574,7 @@ function renderLeadsTable() {
         <td>—</td>
         <td>—</td>
         <td>—</td>
+        <td>—</td>
       </tr>`;
     return;
   }
@@ -524,13 +585,16 @@ function renderLeadsTable() {
       .filter(Boolean)
       .filter((v, i, arr) => arr.indexOf(v) === i)
       .join(", ");
+    const pCount = lead.portfolio_count || 1;
+    const pBadge = `${pCount} ${pCount === 1 ? "Prop" : "Props"}${lead.portfolio_total_value ? ` (${lead.portfolio_total_value})` : ""}`;
 
     tr.innerHTML = `
       <th>${escapeHtml(lead.address)}</th>
       <td><span class="badge">${escapeHtml(lead.property_type)}</span></td>
       <td>${escapeHtml(lead.owner_of_record)}</td>
       <td><strong>${escapeHtml(lead.decision_maker)}</strong></td>
-      <td>${escapeHtml(phonesDisplay || "—")}</td>
+      <td><strong style="color:#34d399">${escapeHtml(phonesDisplay || "—")}</strong></td>
+      <td><span class="badge badge-purple">${escapeHtml(pBadge)}</span></td>
       <td>${escapeHtml(lead.mailing_address || "—")}</td>
       <td>
         <button type="button" class="copy-mini-btn" onclick="deleteLead('${escapeHtml(lead.id)}')">🗑️ Delete</button>
@@ -543,8 +607,10 @@ function renderLeadsTable() {
 async function handleSaveCurrentLead() {
   if (!currentDossier) return;
   const allPhones = [];
+  const allEmails = [];
   (currentDossier.contacts || []).forEach((c) => {
     (c.phones || []).forEach((p) => allPhones.push(p.number));
+    (c.emails || []).forEach((em) => allEmails.push(em));
   });
 
   const payload = {
@@ -553,9 +619,12 @@ async function handleSaveCurrentLead() {
     owner_of_record: currentDossier.owner_of_record,
     decision_maker: currentDossier.primary_decision_maker,
     primary_phone: currentDossier.primary_phone,
+    primary_phone_type: currentDossier.primary_phone_type || "Personal Cell / Direct",
     all_phones: allPhones,
-    emails: [],
+    emails: allEmails,
     mailing_address: currentDossier.tax_mailing_address,
+    portfolio_count: currentDossier.portfolio_count || 1,
+    portfolio_total_value: currentDossier.portfolio_total_value || "",
     confidence: currentDossier.overall_confidence,
   };
 
@@ -607,15 +676,31 @@ async function handleBatchRun() {
 
   for (let i = 0; i < lines.length; i++) {
     progTxt.textContent = `Processing ${i + 1} of ${lines.length}: ${lines[i]}...`;
-    const parts = lines[i].split(",").map((p) => p.trim());
-    const street = parts[0] || "";
-    const city = parts[1] || "";
-    const state = parts[2] || "";
-    const zip_code = parts[3] || "";
-    const property_type = (parts[4] || "residential").toLowerCase().includes("comm") ? "commercial" : "residential";
-    const known_owner_or_llc = parts[5] || "";
+    const defaultCity = document.getElementById("cityInput").value.trim() || "Raleigh";
+    const defaultState = document.getElementById("stateInput").value.trim() || "NC";
+    const defaultZip = document.getElementById("zipInput").value.trim() || "";
+    const defaultType = document.getElementById("propertyType").value || "residential";
+    let street = "", city = defaultCity, state = defaultState, zip_code = defaultZip, property_type = defaultType, known_owner_or_llc = "";
 
-    if (!street || !city || !state) continue;
+    if (lines[i].includes("\t-") || lines[i].includes(" -")) {
+      const dashParts = lines[i].split(/\t?-|\s+-/).map((p) => p.trim());
+      known_owner_or_llc = dashParts[0] || "";
+      street = dashParts[1] || "";
+    } else {
+      const parts = lines[i].split(",").map((p) => p.trim());
+      street = parts[0] || "";
+      city = parts[1] || defaultCity;
+      state = parts[2] || defaultState;
+      zip_code = parts[3] || defaultZip;
+      property_type = (parts[4] || defaultType).toLowerCase().includes("comm")
+        ? "commercial"
+        : (parts[4] || defaultType).toLowerCase().includes("farm")
+        ? "farm"
+        : "residential";
+      known_owner_or_llc = parts[5] || "";
+    }
+
+    if (!street) continue;
     try {
       const res = await fetch("/api/investigate", {
         method: "POST",
@@ -625,6 +710,8 @@ async function handleBatchRun() {
       if (res.ok) {
         const data = await res.json();
         const d = data.dossier;
+        const allPhones = [];
+        (d.contacts || []).forEach((c) => (c.phones || []).forEach((p) => allPhones.push(p.number)));
         await fetch("/api/leads", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -634,7 +721,11 @@ async function handleBatchRun() {
             owner_of_record: d.owner_of_record,
             decision_maker: d.primary_decision_maker,
             primary_phone: d.primary_phone,
+            primary_phone_type: d.primary_phone_type || "Personal Cell / Direct",
+            all_phones: allPhones,
             mailing_address: d.tax_mailing_address,
+            portfolio_count: d.portfolio_count || 1,
+            portfolio_total_value: d.portfolio_total_value || "",
             confidence: d.overall_confidence,
           }),
         });
@@ -654,7 +745,20 @@ function exportLeadsToCsv() {
     showToast("No saved leads to export yet!");
     return;
   }
-  const headers = ["Timestamp", "Property Address", "Type", "Deed Owner / LLC", "Decision Maker", "Primary Phone", "Mailing Address", "Confidence"];
+  const headers = [
+    "Timestamp",
+    "Property Address",
+    "Type",
+    "Deed Owner / LLC",
+    "Verified Decision Maker",
+    "Primary Personal Cell / Phone",
+    "All Discovered Phones",
+    "Portfolio Properties Count",
+    "Portfolio Value & Details",
+    "Tax / Home Mailing Address",
+    "Notes / Verification Proof",
+    "Confidence",
+  ];
   const rows = savedLeads.map((l) => [
     l.created_at || "",
     l.address || "",
@@ -662,7 +766,11 @@ function exportLeadsToCsv() {
     l.owner_of_record || "",
     l.decision_maker || "",
     l.primary_phone || "",
+    (l.all_phones || []).join(" | "),
+    l.portfolio_count || 1,
+    l.portfolio_total_value || "",
     l.mailing_address || "",
+    l.notes || "",
     l.confidence || "",
   ]);
 

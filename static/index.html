@@ -215,21 +215,22 @@
 
       <div class="dossier-summary-grid">
         <div class="summary-box highlight-box">
-          <span class="summary-label">Primary Decision Maker (Human to Call)</span>
+          <span class="summary-label">Verified Decision Maker (Person to Call)</span>
           <div class="summary-value-row">
             <strong id="resDecisionMaker" class="summary-main-value">—</strong>
             <button type="button" class="copy-mini-btn" data-copy-target="resDecisionMaker">Copy</button>
           </div>
+          <span id="resDecisionMakerRole" class="summary-role-badge"></span>
           <span id="resRegisteredAgent" class="summary-subtext"></span>
         </div>
 
         <div class="summary-box highlight-phone-box">
-          <span class="summary-label">Primary Phone Number</span>
+          <span class="summary-label">Primary Personal Cell / Direct Phone</span>
           <div class="summary-value-row">
             <strong id="resPrimaryPhone" class="summary-phone-value">—</strong>
             <button type="button" class="copy-mini-btn" data-copy-target="resPrimaryPhone">Copy</button>
           </div>
-          <span class="summary-subtext">Click any Stage 3 button below to cross-verify live</span>
+          <span id="resPrimaryPhoneType" class="cell-priority-pill">📱 Personal Cell Priority</span>
         </div>
 
         <div class="summary-box">
@@ -249,12 +250,41 @@
           </div>
           <span id="resParcelApn" class="summary-subtext"></span>
         </div>
+
+        <div class="summary-box highlight-portfolio-box">
+          <span class="summary-label">Owner Real Estate Portfolio</span>
+          <div class="summary-value-row">
+            <strong id="resPortfolioCount" class="summary-portfolio-value">1 Property</strong>
+          </div>
+          <span id="resPortfolioValue" class="summary-subtext"></span>
+        </div>
       </div>
 
-      <!-- Contacts & Extracted Phones Breakdown -->
+      <!-- True Beneficial Owner & Multi-LLC / HOA Verification Chain -->
+      <div class="verification-chain-box">
+        <div class="verification-header">
+          <h4>🛡️ True Beneficial Owner &amp; Multi-LLC / Decision-Maker Verification</h4>
+          <span id="resStructureType" class="badge badge-purple">Direct / Pierced Ownership</span>
+        </div>
+        <p id="resVerificationProof" class="verification-proof-text"></p>
+        <div id="shellLayersList" class="shell-layers-chain"></div>
+      </div>
+
+      <!-- Contacts & Extracted Phones Breakdown (Personal Cell First) -->
       <div class="contacts-section">
-        <h3>📞 Discovered Contacts, Officers &amp; Phone Numbers</h3>
+        <h3>📞 Verified Decision-Makers, Officers &amp; Phone Numbers (Personal Cell Prioritized)</h3>
         <div id="contactsList" class="contacts-grid"></div>
+      </div>
+
+      <!-- Owner Property Portfolio Breakdown -->
+      <div id="portfolioSection" class="portfolio-section">
+        <div class="portfolio-header">
+          <div>
+            <h3>🏘️ Owner Property Portfolio &amp; Related Holdings (<span id="portfolioHeaderCount">1</span> Total)</h3>
+            <p id="resPortfolioSummary" class="subtitle"></p>
+          </div>
+        </div>
+        <div id="portfolioPropertiesGrid" class="portfolio-grid"></div>
       </div>
 
       <!-- Recommended Verification Steps -->
@@ -264,13 +294,13 @@
       </div>
     </section>
 
-    <!-- Interactive Deep-Link Launchpad (All 10 Screenshot Bookmarks + 6 Bonus Portals) -->
+    <!-- Interactive Deep-Link Launchpad (All 10 Screenshot Bookmarks + 8 Bonus Portals) -->
     <section class="card launchpad-card">
       <div class="card-header">
         <div>
-          <h2>🔗 Interactive Skip-Trace Tool Launchpad (Your 10 Bookmarks + 6 Bonus Tools)</h2>
+          <h2>🔗 Interactive Skip-Trace Tool Launchpad (Your 10 Bookmarks + Bonus Portals)</h2>
           <p class="subtitle">
-            Every button below automatically updates with the target address, discovered LLC/Corp name, and human owner name.
+            Every button below automatically updates with the target address, discovered LLC/Corp name, and the owner's personal home city &amp; street.
             Clicking any button also copies its target search query to your clipboard for instant pasting into login portals.
           </p>
         </div>
@@ -301,7 +331,7 @@
         <div class="launchpad-col">
           <div class="col-header">
             <h3>Stage 2: Corporate &amp; LLC Piercing</h3>
-            <span>Unmask LLCs $\rightarrow$ Managing Member / Agent</span>
+            <span>Unmask LLCs &rarr; True Beneficial Owner / Manager</span>
           </div>
           <div id="entityToolsContainer" class="tool-cards-list"></div>
         </div>
@@ -309,8 +339,8 @@
         <!-- Column 3: People Search & Phone Skip-Tracing -->
         <div class="launchpad-col">
           <div class="col-header">
-            <h3>Stage 3: People &amp; Phone Lookup</h3>
-            <span>Get Wireless &amp; Landline Phone Numbers</span>
+            <h3>Stage 3: Personal Cell &amp; People Lookup</h3>
+            <span>Get Owner's Personal Wireless &amp; Direct Numbers</span>
           </div>
           <div id="peopleToolsContainer" class="tool-cards-list"></div>
         </div>
@@ -322,7 +352,7 @@
       <div class="card-header">
         <div>
           <h2>📊 Saved Property Leads &amp; Core365 / CSV Export</h2>
-          <p class="subtitle">Save verified owners and phone numbers as you research, then export to CSV/Excel.</p>
+          <p class="subtitle">Save verified owners, portfolios, and personal cell numbers as you research, then export to CSV/Excel.</p>
         </div>
         <div class="header-right">
           <button type="button" id="addManualLeadBtn" class="btn btn-outline">➕ Quick-Add Lead</button>
@@ -337,9 +367,10 @@
               <th>Property Address</th>
               <th>Type</th>
               <th>Deed Owner / LLC</th>
-              <th>Decision Maker</th>
-              <th>Phone Number(s)</th>
-              <th>Mailing Address</th>
+              <th>Verified Decision Maker</th>
+              <th>Personal Cell / Phones</th>
+              <th>Portfolio</th>
+              <th>Tax / Home Mailing Address</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -358,27 +389,35 @@
   <dialog id="settingsDialog" class="app-dialog">
     <form method="dialog" id="settingsForm">
       <div class="dialog-header">
-        <h3>⚙️ Gemini AI Agent Configuration</h3>
+        <h3>⚙️ Bring-Your-Own Gemini API Key &amp; Local Settings</h3>
         <button type="button" class="dialog-close-btn" data-close-dialog="settingsDialog" aria-label="Close">✕</button>
       </div>
       <div class="dialog-body">
         <p>
-          PropTrace AI uses <strong>Google Gemini (Interactions API + Google Search Grounding)</strong> to automatically search county records, pierce corporate filings, and synthesize phone skip-tracing data.
+          PropTrace AI runs <strong>100% standalone on your own computer/server</strong>. All searches, API keys (<code>config.json</code>), and saved leads (<code>saved_leads.json</code>) remain strictly private on your local machine and are never shared with any other user.
         </p>
+        <div class="next-steps-box" style="margin-bottom: 14px;">
+          <h4>🔑 How to Get Your Own Free Google Gemini API Key (Takes 30 Seconds)</h4>
+          <ul>
+            <li>1. Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; font-weight: 600;">Google AI Studio (aistudio.google.com/apikey) ↗</a> and sign in with your Google account.</li>
+            <li>2. Click <strong>"Create API Key"</strong> and copy the key (starts with <code>AIzaSy...</code>).</li>
+            <li>3. Paste it into the box below and click <strong>Save Settings</strong>.</li>
+          </ul>
+        </div>
         <div class="form-group">
-          <label for="apiKeyModalInput">Google Gemini API Key (<code>GEMINI_API_KEY</code>)</label>
+          <label for="apiKeyModalInput">Your Personal Google Gemini API Key (<code>GEMINI_API_KEY</code>)</label>
           <input
             type="password"
             id="apiKeyModalInput"
-            placeholder="AIzaSy..."
+            placeholder="Paste your AIzaSy... key here"
             autocomplete="off"
           />
           <small class="help-text">
-            Stored locally in <code>config.json</code> on your computer. Even without an API key, all 16 automated deep-links and public web scrapers work 100% free!
+            Saved exclusively in your local <code>config.json</code> (git-ignored). Even without an API key, all 18 automated skip-trace deep-links and public GIS/web scrapers work 100% free!
           </small>
         </div>
         <div class="form-group">
-          <label for="core365UrlInput">Custom Core365 | via Portal URL (Bookmark #10)</label>
+          <label for="core365UrlInput">Custom Core365 | via or CRM Portal URL (Optional)</label>
           <input
             type="url"
             id="core365UrlInput"
@@ -387,8 +426,8 @@
         </div>
       </div>
       <div class="dialog-footer">
-        <button type="button" class="btn btn-ghost" data-close-dialog="settingsDialog">Cancel</button>
-        <button type="submit" id="saveSettingsBtn" class="btn btn-primary">Save Settings</button>
+        <button type="button" class="btn btn-ghost" data-close-dialog="settingsDialog">Skip for Now (Free Mode)</button>
+        <button type="submit" id="saveSettingsBtn" class="btn btn-primary">💾 Save API Key Locally</button>
       </div>
     </form>
   </dialog>

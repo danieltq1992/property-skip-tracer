@@ -10,8 +10,11 @@ config.json
 .env
 *.env
 
-# Local Saved Leads Data
+# Local Saved Leads Data, Reports & Exports (NEVER share personal leads!)
 saved_leads.json
+*skip_trace_report*.md
+*.csv
+*.zip
 
 # OS / Editor Files
 .DS_Store
