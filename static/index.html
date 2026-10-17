@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PropTrace AI — Commercial & Residential Property Owner & Phone Skip-Tracer</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">🏢</div>
+      <div>
+        <h1>PropTrace AI</h1>
+        <p class="subtitle">Multi-Agent Commercial &amp; Residential Property Owner + Phone Skip-Tracing</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="apiStatusBadge" class="status-pill status-warn" title="Click Settings to add or update your Gemini API Key">
+        Checking Gemini API...
+      </span>
+      <button type="button" id="openBatchModalBtn" class="btn btn-secondary">
+        📂 Batch CSV Lookup
+      </button>
+      <button type="button" id="openSettingsModalBtn" class="btn btn-outline">
+        ⚙️ API Key &amp; Settings
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Top Grid: Search Form + 3-Agent Pipeline Visualizer -->
+    <section class="top-grid">
+      <div class="card search-card">
+        <div class="card-header">
+          <h2>1. Target Property Investigation</h2>
+          <div class="prop-type-toggle" role="group" aria-label="Property Type">
+            <button type="button" class="toggle-btn active" data-type="residential">🏡 Residential</button>
+            <button type="button" class="toggle-btn" data-type="commercial">🏬 Commercial</button>
+            <button type="button" class="toggle-btn" data-type="farm">🌾 Farm / Land</button>
+          </div>
+        </div>
+
+        <form id="skipTraceForm" autocomplete="on">
+          <input type="hidden" id="propertyType" value="residential" />
+
+          <div class="form-row">
+            <div class="form-group flex-2 autocomplete-wrapper">
+              <label for="streetInput">Street Address (Type street # &amp; name for live autofill) <span class="req">*</span></label>
+              <input
+                type="text"
+                id="streetInput"
+                name="street-address"
+                autocomplete="street-address"
+                placeholder="Start typing e.g. 350 5th Ave or 1200 County Rd..."
+                aria-autocomplete="list"
+                aria-controls="addressSuggestionsList"
+                aria-expanded="false"
+                required
+              />
+              <ul id="addressSuggestionsList" class="autocomplete-dropdown" role="listbox" aria-label="Address suggestions" hidden></ul>
+            </div>
+            <div class="form-group flex-1">
+              <label for="cityInput">City <span class="req">*</span></label>
+              <input
+                type="text"
+                id="cityInput"
+                name="address-level2"
+                autocomplete="address-level2"
+                placeholder="Auto-fills or type city"
+                required
+              />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label for="stateInput">State (2-Letter) <span class="req">*</span></label>
+              <input
+                type="text"
+                id="stateInput"
+                name="address-level1"
+                autocomplete="address-level1"
+                placeholder="e.g. TX"
+                maxlength="2"
+                required
+              />
+            </div>
+            <div class="form-group flex-1">
+              <label for="zipInput">ZIP Code</label>
+              <input
+                type="text"
+                id="zipInput"
+                name="postal-code"
+                autocomplete="postal-code"
+                inputmode="numeric"
+                placeholder="e.g. 78701"
+              />
+            </div>
+            <div class="form-group flex-1">
+              <label for="modelSelect">AI Agent Model</label>
+              <select id="modelSelect" name="agent-model" autocomplete="off">
+                <option value="gemini-3.8-flash">Gemini 3.8 Flash (Fast Agentic)</option>
+                <option value="gemini-4-argon">Gemini 4 Argon (Deep Reasoning)</option>
+                <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (High Speed)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group flex-2">
+              <label for="knownOwnerInput">Known Deed Owner / LLC / Farm Trust Name (Optional)</label>
+              <input
+                type="text"
+                id="knownOwnerInput"
+                name="name"
+                autocomplete="name"
+                placeholder="Leave blank to discover, or paste LLC / Ranch name from LandGlide / Land.com"
+              />
+            </div>
+            <div class="form-group flex-1">
+              <label for="knownPhoneInput">Known Phone (Optional)</label>
+              <input
+                type="tel"
+                id="knownPhoneInput"
+                name="phone"
+                autocomplete="tel"
+                placeholder="e.g. (512) 555-0199"
+              />
+            </div>
+          </div>
+
+          <div class="form-footer">
+            <label class="checkbox-label">
+              <input type="checkbox" id="autoOpenTabsCheckbox" />
+              <span>Auto-launch top free skip-trace tabs (Regrid, TruePeopleSearch, FastPeopleSearch) in browser</span>
+            </label>
+
+            <div class="action-buttons">
+              <button type="button" id="sampleFarmBtn" class="btn btn-ghost">Try Farm / Land Demo</button>
+              <button type="button" id="sampleCommercialBtn" class="btn btn-ghost">Try Commercial Demo</button>
+              <button type="button" id="sampleResidentialBtn" class="btn btn-ghost">Try Residential Demo</button>
+              <button type="submit" id="runAgentsBtn" class="btn btn-primary">
+                🚀 Run AI Skip-Trace Agents
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- 3-Agent Pipeline Status Card -->
+      <div class="card pipeline-card">
+        <div class="card-header">
+          <h2>🤖 Multi-Agent Skip-Trace Pipeline</h2>
+          <span id="pipelineTimer" class="badge">Ready</span>
+        </div>
+
+        <div class="agent-steps">
+          <div class="agent-step" id="stepAgent1">
+            <div class="step-indicator">1</div>
+            <div class="step-body">
+              <div class="step-title-row">
+                <h3>Agent 1: Property, Farm &amp; Parcel Recon</h3>
+                <span class="step-status" id="statusAgent1">Idle</span>
+              </div>
+              <p class="step-tools">Tools: LandGlide • Land.com • Prospect by Buildout • Regrid • County Assessor • LoopNet</p>
+              <p class="step-output" id="outputAgent1">Identifies parcel APN, farm/acreage owner or deed owner of record, and tax mailing address.</p>
+            </div>
+          </div>
+
+          <div class="agent-step" id="stepAgent2">
+            <div class="step-indicator">2</div>
+            <div class="step-body">
+              <div class="step-title-row">
+                <h3>Agent 2: Corporate &amp; LLC Veil Piercer</h3>
+                <span class="step-status" id="statusAgent2">Idle</span>
+              </div>
+              <p class="step-tools">Tools: OpenCorporates • CorporationWiki • B2BHint • Bizapedia • State SOS</p>
+              <p class="step-output" id="outputAgent2">Unmasks LLCs, Corporations &amp; Trusts to find the human Managing Member, Officer, or Registered Agent.</p>
+            </div>
+          </div>
+
+          <div class="agent-step" id="stepAgent3">
+            <div class="step-indicator">3</div>
+            <div class="step-body">
+              <div class="step-title-row">
+                <h3>Agent 3: People Search &amp; Phone Skip-Tracer</h3>
+                <span class="step-status" id="statusAgent3">Idle</span>
+              </div>
+              <p class="step-tools">Tools: TruePeopleSearch • FastPeopleSearch • Spokeo • CyberBackgroundChecks • Gemini Search</p>
+              <p class="step-output" id="outputAgent3">Cross-references wireless &amp; landline numbers, emails, and residential addresses for the decision maker.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Executive Skip-Trace Dossier Section -->
+    <section id="dossierSection" class="card dossier-card" hidden>
+      <div class="card-header">
+        <div>
+          <h2>📋 Property Owner &amp; Phone Skip-Trace Dossier</h2>
+          <p id="dossierSubtitle" class="subtitle"></p>
+        </div>
+        <div class="header-right">
+          <span id="confidenceBadge" class="badge badge-success">High Confidence</span>
+          <button type="button" id="copyGeminiPromptBtn" class="btn btn-outline" title="Copies a deep skip-trace prompt to clipboard and opens Google Gemini">
+            ✨ Copy Prompt &amp; Open Gemini
+          </button>
+          <button type="button" id="saveLeadBtn" class="btn btn-primary">
+            💾 Save Lead to Table
+          </button>
+        </div>
+      </div>
+
+      <div class="dossier-summary-grid">
+        <div class="summary-box highlight-box">
+          <span class="summary-label">Primary Decision Maker (Human to Call)</span>
+          <div class="summary-value-row">
+            <strong id="resDecisionMaker" class="summary-main-value">—</strong>
+            <button type="button" class="copy-mini-btn" data-copy-target="resDecisionMaker">Copy</button>
+          </div>
+          <span id="resRegisteredAgent" class="summary-subtext"></span>
+        </div>
+
+        <div class="summary-box highlight-phone-box">
+          <span class="summary-label">Primary Phone Number</span>
+          <div class="summary-value-row">
+            <strong id="resPrimaryPhone" class="summary-phone-value">—</strong>
+            <button type="button" class="copy-mini-btn" data-copy-target="resPrimaryPhone">Copy</button>
+          </div>
+          <span class="summary-subtext">Click any Stage 3 button below to cross-verify live</span>
+        </div>
+
+        <div class="summary-box">
+          <span class="summary-label">Deed Owner of Record / LLC</span>
+          <div class="summary-value-row">
+            <strong id="resOwnerOfRecord" class="summary-main-value">—</strong>
+            <button type="button" class="copy-mini-btn" data-copy-target="resOwnerOfRecord">Copy</button>
+          </div>
+          <span id="resEntityBadge" class="summary-subtext"></span>
+        </div>
+
+        <div class="summary-box">
+          <span class="summary-label">Tax Bill / Principal Mailing Address</span>
+          <div class="summary-value-row">
+            <strong id="resMailingAddress" class="summary-main-value">—</strong>
+            <button type="button" class="copy-mini-btn" data-copy-target="resMailingAddress">Copy</button>
+          </div>
+          <span id="resParcelApn" class="summary-subtext"></span>
+        </div>
+      </div>
+
+      <!-- Contacts & Extracted Phones Breakdown -->
+      <div class="contacts-section">
+        <h3>📞 Discovered Contacts, Officers &amp; Phone Numbers</h3>
+        <div id="contactsList" class="contacts-grid"></div>
+      </div>
+
+      <!-- Recommended Verification Steps -->
+      <div class="next-steps-box">
+        <h4>🎯 Recommended One-Click Verification Workflow</h4>
+        <ul id="recommendedStepsList"></ul>
+      </div>
+    </section>
+
+    <!-- Interactive Deep-Link Launchpad (All 10 Screenshot Bookmarks + 6 Bonus Portals) -->
+    <section class="card launchpad-card">
+      <div class="card-header">
+        <div>
+          <h2>🔗 Interactive Skip-Trace Tool Launchpad (Your 10 Bookmarks + 6 Bonus Tools)</h2>
+          <p class="subtitle">
+            Every button below automatically updates with the target address, discovered LLC/Corp name, and human owner name.
+            Clicking any button also copies its target search query to your clipboard for instant pasting into login portals.
+          </p>
+        </div>
+        <div class="bulk-launch-buttons">
+          <button type="button" id="launchStage1Btn" class="btn btn-secondary">
+            🏛️ Open Stage 1 (Property)
+          </button>
+          <button type="button" id="launchStage2Btn" class="btn btn-secondary">
+            🏢 Open Stage 2 (LLC Piercing)
+          </button>
+          <button type="button" id="launchStage3Btn" class="btn btn-primary">
+            📲 Open All Free Phone Portals
+          </button>
+        </div>
+      </div>
+
+      <div class="launchpad-columns">
+        <!-- Column 1: Property & Parcel -->
+        <div class="launchpad-col">
+          <div class="col-header">
+            <h3>Stage 1: Property &amp; Parcel Owner</h3>
+            <span>Find Deed Owner / LLC &amp; Tax Address</span>
+          </div>
+          <div id="propertyToolsContainer" class="tool-cards-list"></div>
+        </div>
+
+        <!-- Column 2: Corporate & LLC Piercing -->
+        <div class="launchpad-col">
+          <div class="col-header">
+            <h3>Stage 2: Corporate &amp; LLC Piercing</h3>
+            <span>Unmask LLCs $\rightarrow$ Managing Member / Agent</span>
+          </div>
+          <div id="entityToolsContainer" class="tool-cards-list"></div>
+        </div>
+
+        <!-- Column 3: People Search & Phone Skip-Tracing -->
+        <div class="launchpad-col">
+          <div class="col-header">
+            <h3>Stage 3: People &amp; Phone Lookup</h3>
+            <span>Get Wireless &amp; Landline Phone Numbers</span>
+          </div>
+          <div id="peopleToolsContainer" class="tool-cards-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Saved Leads & CRM Export Table -->
+    <section class="card leads-card">
+      <div class="card-header">
+        <div>
+          <h2>📊 Saved Property Leads &amp; Core365 / CSV Export</h2>
+          <p class="subtitle">Save verified owners and phone numbers as you research, then export to CSV/Excel.</p>
+        </div>
+        <div class="header-right">
+          <button type="button" id="addManualLeadBtn" class="btn btn-outline">➕ Quick-Add Lead</button>
+          <button type="button" id="exportCsvBtn" class="btn btn-secondary">⬇️ Export CSV</button>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table id="leadsTable">
+          <thead>
+            <tr>
+              <th>Property Address</th>
+              <th>Type</th>
+              <th>Deed Owner / LLC</th>
+              <th>Decision Maker</th>
+              <th>Phone Number(s)</th>
+              <th>Mailing Address</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="leadsTableBody">
+            <!-- Populated by app.js -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <!-- Native Modal Dialog 1: API Key & Settings -->
+  <dialog id="settingsDialog" class="app-dialog">
+    <form method="dialog" id="settingsForm">
+      <div class="dialog-header">
+        <h3>⚙️ Gemini AI Agent Configuration</h3>
+        <button type="button" class="dialog-close-btn" data-close-dialog="settingsDialog" aria-label="Close">✕</button>
+      </div>
+      <div class="dialog-body">
+        <p>
+          PropTrace AI uses <strong>Google Gemini (Interactions API + Google Search Grounding)</strong> to automatically search county records, pierce corporate filings, and synthesize phone skip-tracing data.
+        </p>
+        <div class="form-group">
+          <label for="apiKeyModalInput">Google Gemini API Key (<code>GEMINI_API_KEY</code>)</label>
+          <input
+            type="password"
+            id="apiKeyModalInput"
+            placeholder="AIzaSy..."
+            autocomplete="off"
+          />
+          <small class="help-text">
+            Stored locally in <code>config.json</code> on your computer. Even without an API key, all 16 automated deep-links and public web scrapers work 100% free!
+          </small>
+        </div>
+        <div class="form-group">
+          <label for="core365UrlInput">Custom Core365 | via Portal URL (Bookmark #10)</label>
+          <input
+            type="url"
+            id="core365UrlInput"
+            placeholder="https://..."
+          />
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-ghost" data-close-dialog="settingsDialog">Cancel</button>
+        <button type="submit" id="saveSettingsBtn" class="btn btn-primary">Save Settings</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Native Modal Dialog 2: Batch CSV Lookup -->
+  <dialog id="batchDialog" class="app-dialog">
+    <div class="dialog-header">
+      <h3>📂 Batch Property Skip-Trace Queue</h3>
+      <button type="button" class="dialog-close-btn" data-close-dialog="batchDialog" aria-label="Close">✕</button>
+    </div>
+    <div class="dialog-body">
+      <p>
+        Paste multiple properties below (one per line in format: <code>Street, City, State, ZIP, Residential/Commercial, Optional LLC</code>) to run sequential AI skip-tracing and save them directly to your Leads Table.
+      </p>
+      <div class="form-group">
+        <label for="batchTextarea">Property List (One per line)</label>
+        <textarea
+          id="batchTextarea"
+          rows="6"
+          placeholder="1100 Congress Ave, Austin, TX, 78701, commercial&#10;742 Evergreen Terrace, Springfield, IL, 62701, residential"
+        ></textarea>
+      </div>
+      <div id="batchProgressBox" class="batch-progress" hidden>
+        <span id="batchProgressText">Processing 0 / 0...</span>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button type="button" class="btn btn-ghost" data-close-dialog="batchDialog">Close</button>
+      <button type="button" id="runBatchBtn" class="btn btn-primary">▶️ Run Batch Skip-Trace</button>
+    </div>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

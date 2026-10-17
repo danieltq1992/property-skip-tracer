@@ -1,0 +1,20 @@
+# Virtual Environment & Python Cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets & Local Configuration (NEVER commit API keys!)
+config.json
+.env
+*.env
+
+# Local Saved Leads Data
+saved_leads.json
+
+# OS / Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
