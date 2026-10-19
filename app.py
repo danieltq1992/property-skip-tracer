@@ -2,18 +2,34 @@ import asyncio
 import json
 import os
 import re
+import socket
+import subprocess
+import sys
+import threading
+import time
 import urllib.parse
 import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import httpx
-from bs4 import BeautifulSoup
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+# If someone double-clicks app.py directly in File Explorer using global Python,
+# automatically re-launch inside the local .venv virtual environment if needed.
+_BASE_DIR_INIT = Path(__file__).resolve().parent
+_VENV_WIN = _BASE_DIR_INIT / ".venv" / "Scripts" / "python.exe"
+_VENV_POSIX = _BASE_DIR_INIT / ".venv" / "bin" / "python"
+try:
+    import httpx
+    from bs4 import BeautifulSoup
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from pydantic import BaseModel, Field
+except ImportError:
+    _target_py = _VENV_WIN if _VENV_WIN.exists() else (_VENV_POSIX if _VENV_POSIX.exists() else None)
+    if _target_py and Path(sys.executable).resolve() != _target_py.resolve():
+        raise SystemExit(subprocess.call([str(_target_py), str(Path(__file__).resolve()), *sys.argv[1:]]))
+    raise
 
 try:
     from google import genai
@@ -1852,6 +1868,38 @@ async def serve_index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+def _is_port_open(host: str = "127.0.0.1", port: int = 8765) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.4):
+            return True
+    except OSError:
+        return False
+
+
+def _open_browser_when_ready(url: str = "http://127.0.0.1:8765") -> None:
+    for _ in range(40):
+        if _is_port_open("127.0.0.1", 8765):
+            time.sleep(0.2)
+            webbrowser.open(url)
+            return
+        time.sleep(0.25)
+
+
 if __name__ == "__main__":
     import uvicorn
+
+    url = "http://127.0.0.1:8765"
+    no_browser = "--no-browser" in sys.argv or os.environ.get("PROPTRACE_NO_BROWSER") == "1"
+
+    if _is_port_open("127.0.0.1", 8765):
+        print(f"PropTrace AI server is already running at {url} - opening in your browser now!")
+        if not no_browser:
+            webbrowser.open(url)
+        raise SystemExit(0)
+
+    if not no_browser:
+        threading.Thread(target=_open_browser_when_ready, args=(url,), daemon=True).start()
+
+    print(f"Starting PropTrace AI Server at {url} ...")
     uvicorn.run("app:app", host="127.0.0.1", port=8765, reload=False)
+

@@ -1,9 +1,9 @@
 @echo off
-title PropTrace AI — Standalone Property Owner & Personal Cell Skip-Tracer
+title PropTrace AI - Standalone Property Owner and Personal Cell Skip-Tracer
 cd /d "%~dp0"
 
 echo ============================================================================
-echo   PropTrace AI — Standalone Local Server (100%% Private to Your Machine)
+echo   PropTrace AI - Standalone Local Server (100%% Private to Your Machine)
 echo ============================================================================
 echo.
 
@@ -25,10 +25,9 @@ if not exist ".venv\Scripts\python.exe" (
     echo.
 )
 
-echo Starting PropTrace AI local server on http://127.0.0.1:8765 ...
-echo Your browser will open automatically in 2 seconds.
-echo (Keep this window open while using PropTrace AI)
+echo Starting PropTrace AI on http://127.0.0.1:8765 ...
+echo Your browser will open automatically as soon as the server is ready.
+echo (Keep this black window open while using PropTrace AI)
 echo.
-start "" /b cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:8765"
 ".venv\Scripts\python.exe" app.py
-pause
+if errorlevel 1 pause
