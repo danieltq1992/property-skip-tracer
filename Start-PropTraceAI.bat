@@ -25,9 +25,10 @@ if not exist ".venv\Scripts\python.exe" (
     echo.
 )
 
-echo Launching PropTrace AI in your browser at http://127.0.0.1:8765 ...
-echo (On first launch, click "API Key & Settings" to paste your own free Gemini API Key)
+echo Starting PropTrace AI local server on http://127.0.0.1:8765 ...
+echo Your browser will open automatically in 2 seconds.
+echo (Keep this window open while using PropTrace AI)
 echo.
-start http://127.0.0.1:8765
+start "" /b cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:8765"
 ".venv\Scripts\python.exe" app.py
 pause
