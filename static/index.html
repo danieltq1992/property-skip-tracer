@@ -20,7 +20,7 @@
         Checking Gemini API...
       </span>
       <button type="button" id="openBatchModalBtn" class="btn btn-secondary">
-        📂 Batch CSV Lookup
+        📗 Batch Excel / CSV Lookup
       </button>
       <button type="button" id="openSettingsModalBtn" class="btn btn-outline">
         ⚙️ API Key &amp; Settings
@@ -356,6 +356,7 @@
         </div>
         <div class="header-right">
           <button type="button" id="addManualLeadBtn" class="btn btn-outline">➕ Quick-Add Lead</button>
+          <button type="button" id="exportXlsxBtn" class="btn btn-primary">📗 Export Excel (.xlsx)</button>
           <button type="button" id="exportCsvBtn" class="btn btn-secondary">⬇️ Export CSV</button>
         </div>
       </div>
@@ -432,24 +433,100 @@
     </form>
   </dialog>
 
-  <!-- Native Modal Dialog 2: Batch CSV Lookup -->
-  <dialog id="batchDialog" class="app-dialog">
+  <!-- Native Modal Dialog 2: Batch Microsoft Excel (.xlsx / .xls) & CSV Lookup -->
+  <dialog id="batchDialog" class="app-dialog app-dialog-wide">
     <div class="dialog-header">
-      <h3>📂 Batch Property Skip-Trace Queue</h3>
+      <h3>📗 Batch Microsoft Excel (.xlsx / .xls) &amp; CSV Skip-Trace Queue</h3>
       <button type="button" class="dialog-close-btn" data-close-dialog="batchDialog" aria-label="Close">✕</button>
     </div>
     <div class="dialog-body">
       <p>
-        Paste multiple properties below (one per line in format: <code>Street, City, State, ZIP, Residential/Commercial, Optional LLC</code>) to run sequential AI skip-tracing and save them directly to your Leads Table.
+        Upload any <strong>Microsoft Excel spreadsheet (<code>.xlsx</code>, <code>.xls</code>)</strong> or <strong><code>.csv</code> file</strong> (or paste cells directly from Excel).
+        PropTrace AI automatically reads the <strong>very top row (Row 1)</strong> in its exact column order to determine what each column represents, and maps every row's cells to the right column.
       </p>
-      <div class="form-group">
-        <label for="batchTextarea">Property List (One per line)</label>
-        <textarea
-          id="batchTextarea"
-          rows="6"
-          placeholder="1100 Congress Ave, Austin, TX, 78701, commercial&#10;742 Evergreen Terrace, Springfield, IL, 62701, residential"
-        ></textarea>
+
+      <!-- Step 1: Upload Excel / CSV File or Paste Table -->
+      <div class="batch-upload-grid">
+        <div id="batchDropZone" class="batch-dropzone">
+          <div class="dropzone-icon">📊</div>
+          <div class="dropzone-title">Upload Microsoft Excel (<code>.xlsx</code>, <code>.xls</code>) or <code>.csv</code></div>
+          <div class="dropzone-sub">Drag &amp; drop your spreadsheet here, or click to browse files</div>
+          <input
+            type="file"
+            id="batchFileInput"
+            accept=".xlsx,.xlsm,.xls,.csv,.tsv,.txt"
+            hidden
+          />
+          <button type="button" id="browseSpreadsheetBtn" class="btn btn-primary" style="margin-top: 8px;">
+            📂 Choose Excel / CSV File
+          </button>
+          <div id="loadedFileBadge" class="loaded-file-badge" hidden></div>
+        </div>
+
+        <div class="batch-paste-box">
+          <label for="batchTextarea">Or Paste Rows Copied from Excel / CSV (Include Top Header Row)</label>
+          <textarea
+            id="batchTextarea"
+            rows="4"
+            placeholder="Owner&#9;Address&#9;City&#9;State&#10;Apex Holdings LLC&#9;1100 Congress Ave&#9;Austin&#9;TX&#10;Green Valley Farms Inc&#9;450 County Rd 12&#9;Raleigh&#9;NC"
+          ></textarea>
+          <button type="button" id="parsePastedBtn" class="btn btn-secondary" style="margin-top: 6px; width: 100%;">
+            🔍 Read Top Row Headers &amp; Map Pasted Rows
+          </button>
+        </div>
       </div>
+
+      <!-- Optional Fallback City/State when spreadsheet only has Owner + Street Address columns -->
+      <div class="batch-defaults-bar">
+        <span class="defaults-label">Fallback Values (used only if your spreadsheet doesn't have a City / State column):</span>
+        <div class="defaults-inputs">
+          <input type="text" id="batchDefaultCity" placeholder="Default City (if not in sheet)" />
+          <input type="text" id="batchDefaultState" placeholder="State (e.g. NC)" maxlength="2" style="width: 80px;" />
+          <select id="batchDefaultType">
+            <option value="residential">Default: Residential</option>
+            <option value="commercial">Default: Commercial</option>
+            <option value="farm">Default: Farm / Land</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Step 2: Detected Top Row (Row 1) Column Order & Mapping Bar -->
+      <div id="batchMappingSection" class="batch-mapping-section" hidden>
+        <div class="mapping-header-bar">
+          <div>
+            <h4>🧭 Detected Row 1 Column Order &amp; Field Mapping</h4>
+            <p class="subtitle" id="batchSheetSummary">
+              Read from Row 1 in exact spreadsheet column order. Change any dropdown below if you want to remap a column.
+            </p>
+          </div>
+          <span id="batchRowCountBadge" class="badge badge-success">0 Rows Mapped</span>
+        </div>
+
+        <div id="batchColumnsContainer" class="batch-columns-grid"></div>
+
+        <!-- Step 3: Row-by-Row Mapped Preview Table -->
+        <div class="batch-preview-wrapper">
+          <h4>📋 Row-by-Row Mapped Preview (Verifying Which Column Belongs to Which Row)</h4>
+          <div class="table-wrapper batch-table-scroll">
+            <table id="batchPreviewTable">
+              <thead>
+                <tr>
+                  <th>Sheet Row</th>
+                  <th>Street Address</th>
+                  <th>City</th>
+                  <th>State</th>
+                  <th>ZIP</th>
+                  <th>Owner / LLC</th>
+                  <th>Type</th>
+                  <th>Phone / Extra Columns</th>
+                </tr>
+              </thead>
+              <tbody id="batchPreviewBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <div id="batchProgressBox" class="batch-progress" hidden>
         <span id="batchProgressText">Processing 0 / 0...</span>
       </div>

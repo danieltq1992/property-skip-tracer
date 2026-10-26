@@ -1,4 +1,6 @@
 import asyncio
+import csv
+import io
 import json
 import os
 import re
@@ -20,9 +22,10 @@ _VENV_WIN = _BASE_DIR_INIT / ".venv" / "Scripts" / "python.exe"
 _VENV_POSIX = _BASE_DIR_INIT / ".venv" / "bin" / "python"
 try:
     import httpx
+    import openpyxl
     from bs4 import BeautifulSoup
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import FileResponse
+    from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+    from fastapi.responses import FileResponse, Response
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
 except ImportError:
@@ -30,6 +33,12 @@ except ImportError:
     if _target_py and Path(sys.executable).resolve() != _target_py.resolve():
         raise SystemExit(subprocess.call([str(_target_py), str(Path(__file__).resolve()), *sys.argv[1:]]))
     raise
+
+try:
+    import xlrd
+    HAS_XLRD = True
+except ImportError:
+    HAS_XLRD = False
 
 try:
     from google import genai
@@ -270,9 +279,443 @@ class ApiKeyRequest(BaseModel):
     gemini_api_key: str
 
 
+class BatchParseTextRequest(BaseModel):
+    raw_text: str
+    default_city: str = ""
+    default_state: str = "NC"
+    default_zip: str = ""
+    default_property_type: str = "residential"
+    custom_roles: Optional[List[str]] = None
+
+
+class BatchRemapRequest(BaseModel):
+    header_row: List[str]
+    data_rows: List[List[str]]
+    column_roles: List[str]
+    default_city: str = ""
+    default_state: str = "NC"
+    default_zip: str = ""
+    default_property_type: str = "residential"
+
+
 # ---------------------------------------------------------------------------
-# Helper Functions: Config & Saved Leads
+# Helper Functions: Config, Saved Leads & Spreadsheet Header-Row Parser
 # ---------------------------------------------------------------------------
+
+def excel_col_letter(col_idx: int) -> str:
+    """Converts 0-based column index to Excel column letter (0 -> A, 25 -> Z, 26 -> AA)."""
+    result = ""
+    n = col_idx + 1
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        result = chr(65 + rem) + result
+    return result
+
+
+def format_cell_value(val: Any) -> str:
+    """Formats Excel/CSV cell values cleanly, preserving integer ZIP codes and house numbers."""
+    if val is None:
+        return ""
+    if isinstance(val, bool):
+        return "TRUE" if val else "FALSE"
+    if isinstance(val, int):
+        return str(val)
+    if isinstance(val, float):
+        if val.is_integer():
+            return str(int(val))
+        return str(val)
+    return str(val).strip()
+
+
+def extract_raw_rows_from_bytes(file_bytes: bytes, filename: str) -> Dict[str, Any]:
+    """Reads an Excel (.xlsx, .xlsm, .xls) or CSV/TSV file and returns sheet names + raw rows."""
+    fname_low = (filename or "").lower()
+    rows: List[List[str]] = []
+    sheet_name = "Sheet1"
+
+    if fname_low.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+        sheet_name = wb.sheetnames[0] if wb.sheetnames else "Sheet1"
+        ws = wb[sheet_name]
+        for row_vals in ws.iter_rows(values_only=True):
+            cleaned = [format_cell_value(c) for c in row_vals]
+            if any(cleaned):
+                # Trim trailing empty cells while keeping internal alignment
+                while cleaned and cleaned[-1] == "":
+                    cleaned.pop()
+                rows.append(cleaned)
+        wb.close()
+    elif fname_low.endswith(".xls"):
+        if not HAS_XLRD:
+            raise HTTPException(status_code=400, detail="xlrd package is required to read legacy .xls files.")
+        wb = xlrd.open_workbook(file_contents=file_bytes)
+        sheet = wb.sheet_by_index(0)
+        sheet_name = sheet.name
+        for r_idx in range(sheet.nrows):
+            cleaned = [format_cell_value(sheet.cell_value(r_idx, c_idx)) for c_idx in range(sheet.ncols)]
+            if any(cleaned):
+                while cleaned and cleaned[-1] == "":
+                    cleaned.pop()
+                rows.append(cleaned)
+    else:
+        # CSV, TSV, or plain text file
+        text_content = ""
+        for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+            try:
+                text_content = file_bytes.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        return extract_raw_rows_from_text(text_content, sheet_name=filename or "CSV")
+
+    return normalize_single_col_table(rows, sheet_name=sheet_name)
+
+
+def extract_raw_rows_from_text(raw_text: str, sheet_name: str = "Pasted Table") -> Dict[str, Any]:
+    """Parses pasted Excel cells (tab-separated), CSV text, or dash-separated lists into rows."""
+    lines = [line for line in (raw_text or "").splitlines() if line.strip()]
+    if not lines:
+        return {"sheet_name": sheet_name, "rows": []}
+
+    # Detect delimiter from the first few lines (Tab from Excel copy-paste takes priority if present)
+    first_line = lines[0]
+    if "\t" in first_line:
+        reader = csv.reader(lines, delimiter="\t")
+        rows = [[c.strip() for c in r] for r in reader if any(c.strip() for c in r)]
+    elif "," in first_line:
+        reader = csv.reader(lines, delimiter=",")
+        rows = [[c.strip() for c in r] for r in reader if any(c.strip() for c in r)]
+    elif ";" in first_line:
+        reader = csv.reader(lines, delimiter=";")
+        rows = [[c.strip() for c in r] for r in reader if any(c.strip() for c in r)]
+    elif "|" in first_line:
+        reader = csv.reader(lines, delimiter="|")
+        rows = [[c.strip() for c in r] for r in reader if any(c.strip() for c in r)]
+    else:
+        rows = [[line.strip()] for line in lines]
+
+    return normalize_single_col_table(rows, sheet_name=sheet_name)
+
+
+def normalize_single_col_table(rows: List[List[str]], sheet_name: str = "Sheet1") -> Dict[str, Any]:
+    """If a table has only 1 column where rows use 'Owner - Address' separator, split into 2 columns."""
+    if not rows:
+        return {"sheet_name": sheet_name, "rows": []}
+
+    max_cols = max(len(r) for r in rows)
+    if max_cols == 1 and any("-" in r[0] for r in rows):
+        split_rows: List[List[str]] = []
+        for r in rows:
+            cell = r[0]
+            if "\t-" in cell or " -" in cell or "- " in cell or "-" in cell:
+                parts = [p.strip() for p in re.split(r"\t?-|\s+-|-\s+", cell, maxsplit=1)]
+                if len(parts) == 2:
+                    split_rows.append(parts)
+                else:
+                    split_rows.append([cell])
+            else:
+                split_rows.append([cell])
+        rows = split_rows
+        max_cols = max(len(r) for r in rows)
+
+    # Pad all rows to max_cols so every row has the exact same number of columns as Row 1
+    if len(rows[0]) < max_cols:
+        for idx in range(len(rows[0]), max_cols):
+            rows[0].append(f"Column {excel_col_letter(idx)}")
+    padded_rows = [r + [""] * (max_cols - len(r)) for r in rows]
+    return {"sheet_name": sheet_name, "rows": padded_rows}
+
+
+def classify_single_header(raw_header: str, sample_val: str = "") -> str:
+    """Determines what field a column represents based on its Row 1 header text."""
+    h_clean = re.sub(r"^[-•*#]+\s*", "", (raw_header or "").strip())
+    h_low = re.sub(r"[^a-z0-9]+", " ", h_clean.lower()).strip()
+    h_nospace = h_low.replace(" ", "")
+
+    # 1. Check Mailing / Tax Address columns first so they don't collide with Property Address/City/State/Zip
+    if any(
+        w in h_low
+        for w in (
+            "mailing address",
+            "mail address",
+            "mailadd",
+            "tax address",
+            "billing address",
+            "owner address",
+            "mailing street",
+            "mail st",
+        )
+    ):
+        return "mailing_address"
+    if h_nospace in ("mcity", "mailcity", "mailingcity", "mstate", "mailstate", "mzip", "mailzip"):
+        return "notes"
+
+    # 2. Street / Property Address
+    if any(
+        w in h_low
+        for w in (
+            "street address",
+            "property address",
+            "site address",
+            "siteadd",
+            "physical address",
+            "situs address",
+            "situs",
+            "parcel address",
+            "prop address",
+            "building address",
+            "location address",
+            "street name",
+            "street no",
+            "street number",
+            "house number",
+        )
+    ) or h_low in ("address", "street", "addr", "road", "location", "property", "site"):
+        return "street"
+
+    # 3. Property City
+    if h_low in ("city", "town", "municipality", "scity", "site city", "property city", "situs city", "physical city") or (
+        "city" in h_low and "mail" not in h_low
+    ):
+        return "city"
+
+    # 4. Property State
+    if h_low in ("state", "st", "province", "region", "sstate", "site state", "property state", "situs state") or (
+        "state" in h_low and "mail" not in h_low and "estate" not in h_low
+    ):
+        return "state"
+
+    # 5. Property ZIP Code
+    if h_low in ("zip", "zip code", "zipcode", "postal", "postal code", "szip", "site zip", "property zip", "situs zip") or (
+        ("zip" in h_low or "postal" in h_low) and "mail" not in h_low
+    ):
+        return "zip_code"
+
+    # 6. Deed Owner / LLC / Entity Name
+    if any(
+        w in h_low
+        for w in (
+            "owner",
+            "ownname",
+            "deed",
+            "llc",
+            "company",
+            "business",
+            "entity",
+            "corporation",
+            "corp",
+            "taxpayer",
+            "landowner",
+            "farm name",
+            "ranch name",
+            "grantor",
+            "grantee",
+            "trust",
+            "contact name",
+            "full name",
+            "client",
+            "customer",
+        )
+    ) or h_low in ("name", "principal"):
+        return "known_owner_or_llc"
+
+    # 7. Phone / Cell Number
+    if any(w in h_low for w in ("phone", "cell", "mobile", "wireless", "telephone", "tel", "contact number")):
+        return "known_phone"
+
+    # 8. Property Type / Land Use
+    if any(
+        w in h_low
+        for w in (
+            "property type",
+            "prop type",
+            "land use",
+            "building type",
+            "asset type",
+            "property class",
+            "zoning",
+            "category",
+        )
+    ) or h_low in ("type", "use", "class"):
+        return "property_type"
+
+    # 9. Parcel APN / PIN / Tax ID
+    if any(w in h_low for w in ("apn", "parcel", "parno", "pin", "tax id", "pid", "account number")):
+        return "parcel_apn"
+
+    # Fallback: check if the sample value in Row 2 looks strongly like a street address and no header matched
+    if sample_val and re.match(r"^\d+\s+[A-Za-z0-9]", sample_val.strip()) and h_low in ("col a", "column a", "field1", ""):
+        return "street"
+
+    return "notes"
+
+
+def classify_top_row_headers(header_row: List[str], data_rows: List[List[str]]) -> List[Dict[str, Any]]:
+    """Reads the very top row (Row 1) in its exact column order and determines what each column represents."""
+    sample_row = data_rows[0] if data_rows else []
+    columns_meta: List[Dict[str, Any]] = []
+
+    for col_idx, raw_hdr in enumerate(header_row):
+        sample_val = sample_row[col_idx] if col_idx < len(sample_row) else ""
+        role = classify_single_header(raw_hdr, sample_val=sample_val)
+        columns_meta.append(
+            {
+                "col_index": col_idx,
+                "col_letter": excel_col_letter(col_idx),
+                "header_name": raw_hdr.strip() or f"Column {excel_col_letter(col_idx)}",
+                "mapped_to": role,
+                "sample_value": sample_val,
+            }
+        )
+
+    # If no column was mapped to 'street', check if any column was mapped to 'mailing_address' and promote it,
+    # or check sample values for a street address pattern
+    if not any(c["mapped_to"] == "street" for c in columns_meta):
+        for c in columns_meta:
+            if c["mapped_to"] == "mailing_address":
+                c["mapped_to"] = "street"
+                break
+        else:
+            for c in columns_meta:
+                sv = re.sub(r"^[-•*]+\s*", "", (c["sample_value"] or "").strip())
+                if re.match(r"^\d+\s+[A-Za-z]", sv):
+                    c["mapped_to"] = "street"
+                    break
+
+    return columns_meta
+
+
+def normalize_property_type_value(raw_val: str, default_type: str = "residential") -> str:
+    low = (raw_val or "").strip().lower()
+    if not low:
+        return default_type
+    if any(k in low for k in ("comm", "retail", "office", "ind", "warehouse", "store", "shopping", "plaza", "hotel", "motel")):
+        return "commercial"
+    if any(k in low for k in ("farm", "ag", "ranch", "land", "timber", "acre", "poultry", "crop", "rural", "vacant", "pasture")):
+        return "farm"
+    if any(k in low for k in ("res", "single", "sfr", "home", "house", "condo", "townhouse", "apt", "multi", "duplex")):
+        return "residential"
+    return default_type
+
+
+def build_mapped_rows_from_table(
+    header_row: List[str],
+    data_rows: List[List[str]],
+    column_roles: List[str],
+    default_city: str = "",
+    default_state: str = "NC",
+    default_zip: str = "",
+    default_property_type: str = "residential",
+) -> List[Dict[str, Any]]:
+    """Maps every data row (Row 2+) strictly according to the column order and roles established by Row 1."""
+    mapped_records: List[Dict[str, Any]] = []
+
+    for offset, row_cells in enumerate(data_rows):
+        excel_row_num = offset + 2  # Row 1 is the header row
+        if not any((c or "").strip() for c in row_cells):
+            continue
+
+        street_parts: List[str] = []
+        city_val = ""
+        state_val = ""
+        zip_val = ""
+        owner_parts: List[str] = []
+        phone_val = ""
+        prop_type_raw = ""
+        mailing_val = ""
+        apn_val = ""
+        extra_notes: List[str] = []
+        row_by_header: Dict[str, str] = {}
+
+        for col_idx, role in enumerate(column_roles):
+            hdr_label = (
+                header_row[col_idx].strip()
+                if col_idx < len(header_row) and header_row[col_idx].strip()
+                else f"Column {excel_col_letter(col_idx)}"
+            )
+            cell_val = row_cells[col_idx].strip() if col_idx < len(row_cells) and row_cells[col_idx] else ""
+            row_by_header[hdr_label] = cell_val
+            if not cell_val or role == "ignore":
+                continue
+
+            if role == "street":
+                street_parts.append(re.sub(r"^[-•*]+\s*", "", cell_val).strip())
+            elif role == "city" and not city_val:
+                city_val = cell_val
+            elif role == "state" and not state_val:
+                state_val = cell_val
+            elif role == "zip_code" and not zip_val:
+                # Keep 5-digit ZIP
+                m_z = re.search(r"\b(\d{5})\b", cell_val)
+                zip_val = m_z.group(1) if m_z else cell_val
+            elif role == "known_owner_or_llc":
+                owner_parts.append(cell_val)
+            elif role == "known_phone" and not phone_val:
+                phone_val = cell_val
+            elif role == "property_type" and not prop_type_raw:
+                prop_type_raw = cell_val
+            elif role == "mailing_address" and not mailing_val:
+                mailing_val = cell_val
+            elif role == "parcel_apn" and not apn_val:
+                apn_val = cell_val
+            else:
+                extra_notes.append(f"{hdr_label}: {cell_val}")
+
+        street_combined = " ".join(street_parts).strip()
+
+        # If the Street cell contains a full combined address like "123 Main St, Beulaville, NC 28518"
+        # and City/State were not in separate columns, split them out cleanly
+        if street_combined and ("," in street_combined or re.search(r"\b[A-Z]{2}\s+\d{5}\b", street_combined)):
+            m_full = re.match(
+                r"^([^,]+),\s*([^,]+?)(?:,\s*|\s+)([A-Za-z]{2})(?:\s+(\d{5}))?$",
+                street_combined.strip(),
+            )
+            if m_full:
+                street_combined = m_full.group(1).strip()
+                if not city_val:
+                    city_val = m_full.group(2).strip()
+                if not state_val:
+                    state_val = m_full.group(3).strip().upper()
+                if not zip_val and m_full.group(4):
+                    zip_val = m_full.group(4).strip()
+
+        final_city = city_val or default_city.strip() or "Raleigh"
+        final_state = (state_val or default_state.strip() or "NC").upper()[:2]
+        final_zip = zip_val or default_zip.strip()
+        final_owner = " / ".join(owner_parts).strip()
+
+        # Infer farm if owner has FARMS / RANCH / POULTRY and property_type wasn't explicitly set
+        inferred_default_type = default_property_type
+        if not prop_type_raw and any(k in final_owner.upper() for k in ("FARM", "RANCH", "POULTRY", "TIMBER", "AGRI")):
+            inferred_default_type = "farm"
+        final_type = normalize_property_type_value(prop_type_raw, default_type=inferred_default_type)
+
+        if apn_val:
+            extra_notes.insert(0, f"Spreadsheet APN: {apn_val}")
+        if mailing_val:
+            extra_notes.insert(0, f"Spreadsheet Mailing Addr: {mailing_val}")
+
+        if not street_combined and not final_owner:
+            continue
+
+        mapped_records.append(
+            {
+                "row_number": excel_row_num,
+                "street": street_combined,
+                "city": final_city,
+                "state": final_state,
+                "zip_code": final_zip,
+                "property_type": final_type,
+                "known_owner_or_llc": final_owner,
+                "known_phone": phone_val,
+                "mailing_address_hint": mailing_val,
+                "parcel_apn_hint": apn_val,
+                "notes": " | ".join(extra_notes),
+                "row_by_header": row_by_header,
+            }
+        )
+
+    return mapped_records
 
 def get_saved_api_key() -> str:
     env_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -1858,6 +2301,214 @@ async def delete_lead(lead_id: str):
     leads = [item for item in load_saved_leads() if item.get("id") != lead_id]
     write_saved_leads(leads)
     return {"status": "ok", "total": len(leads)}
+
+
+@app.get("/api/leads/export-xlsx")
+async def export_leads_xlsx():
+    """Exports all saved leads as a formatted Microsoft Excel (.xlsx) workbook."""
+    leads = load_saved_leads()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "PropTrace AI Leads"
+
+    headers = [
+        "Timestamp",
+        "Property Address",
+        "Type",
+        "Deed Owner / LLC",
+        "Verified Decision Maker",
+        "Primary Personal Cell / Phone",
+        "Phone Type",
+        "All Discovered Phones",
+        "Emails",
+        "Portfolio Properties Count",
+        "Portfolio Value & Details",
+        "Tax / Home Mailing Address",
+        "Notes / Extra Columns",
+        "Confidence",
+    ]
+    ws.append(headers)
+
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    for l in leads:
+        ws.append(
+            [
+                l.get("created_at") or "",
+                l.get("address") or "",
+                l.get("property_type") or "",
+                l.get("owner_of_record") or "",
+                l.get("decision_maker") or "",
+                l.get("primary_phone") or "",
+                l.get("primary_phone_type") or "Personal Cell / Direct",
+                " | ".join(l.get("all_phones") or []),
+                " | ".join(l.get("emails") or []),
+                l.get("portfolio_count") or 1,
+                l.get("portfolio_total_value") or "",
+                l.get("mailing_address") or "",
+                l.get("notes") or "",
+                l.get("confidence") or "",
+            ]
+        )
+
+    ws.freeze_panes = "A2"
+    for col in ws.columns:
+        max_len = max((len(str(cell.value or "")) for cell in col), default=12)
+        col_letter = col[0].column_letter
+        ws.column_dimensions[col_letter].width = min(max(max_len + 3, 14), 48)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"proptrace_leads_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/batch/parse-spreadsheet")
+async def parse_batch_spreadsheet(
+    file: UploadFile = File(...),
+    default_city: str = Form(""),
+    default_state: str = Form("NC"),
+    default_zip: str = Form(""),
+    default_property_type: str = Form("residential"),
+):
+    """Reads an uploaded Microsoft Excel (.xlsx, .xlsm, .xls) or CSV/TSV file,
+    inspects the very top row (Row 1) in its exact column order to determine what each column represents,
+    and maps every subsequent row (Row 2+) to those columns."""
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    parsed = extract_raw_rows_from_bytes(raw_bytes, file.filename or "spreadsheet.xlsx")
+    all_rows = parsed["rows"]
+    if not all_rows:
+        raise HTTPException(status_code=400, detail="No rows found in spreadsheet.")
+
+    # Row 1 (index 0) is the top header row defining the columns and their order
+    header_row = all_rows[0]
+    data_rows = all_rows[1:]
+    columns_meta = classify_top_row_headers(header_row, data_rows)
+    column_roles = [c["mapped_to"] for c in columns_meta]
+
+    mapped_rows = build_mapped_rows_from_table(
+        header_row=header_row,
+        data_rows=data_rows,
+        column_roles=column_roles,
+        default_city=default_city,
+        default_state=default_state,
+        default_zip=default_zip,
+        default_property_type=default_property_type,
+    )
+
+    return {
+        "filename": file.filename or "spreadsheet.xlsx",
+        "sheet_name": parsed["sheet_name"],
+        "header_row": header_row,
+        "columns": columns_meta,
+        "data_rows": data_rows,
+        "mapped_rows": mapped_rows,
+        "total_rows": len(mapped_rows),
+    }
+
+
+@app.post("/api/batch/parse-text")
+async def parse_batch_text(req: BatchParseTextRequest):
+    """Parses pasted Excel/CSV/tabular text. Uses Row 1 as the header row if it contains column titles,
+    or synthesizes default column headers if the user pasted raw data lines without headers."""
+    parsed = extract_raw_rows_from_text(req.raw_text, sheet_name="Pasted List")
+    all_rows = parsed["rows"]
+    if not all_rows:
+        return {
+            "filename": "Pasted List",
+            "sheet_name": "Pasted List",
+            "header_row": [],
+            "columns": [],
+            "data_rows": [],
+            "mapped_rows": [],
+            "total_rows": 0,
+        }
+
+    first_row = all_rows[0]
+    # Check if Row 1 is a header row (doesn't start with a street house number, or matches known header words)
+    first_cell_clean = re.sub(r"^[-•*]+\s*", "", (first_row[0] or "").strip())
+    second_cell_clean = re.sub(r"^[-•*]+\s*", "", (first_row[1] if len(first_row) > 1 else "").strip())
+    starts_with_street_num = bool(re.match(r"^\d+\s+[A-Za-z]", first_cell_clean) or re.match(r"^\d+\s+[A-Za-z]", second_cell_clean))
+    has_header_keyword = any(
+        classify_single_header(cell) != "notes"
+        for cell in first_row
+        if not re.match(r"^\d+\s+[A-Za-z]", re.sub(r"^[-•*]+\s*", "", (cell or "").strip()))
+    )
+
+    if has_header_keyword and not starts_with_street_num:
+        header_row = first_row
+        data_rows = all_rows[1:]
+    else:
+        # User pasted raw data lines without a top header row; synthesize standard headers matching the format
+        data_rows = all_rows
+        if len(first_row) == 2 and re.match(r"^\d+\s+[A-Za-z]", second_cell_clean):
+            header_row = ["Owner", "Address"]
+        else:
+            default_hdrs = ["Street Address", "City", "State", "ZIP Code", "Property Type", "Owner / LLC"]
+            header_row = [
+                default_hdrs[idx] if idx < len(default_hdrs) else f"Column {excel_col_letter(idx)}"
+                for idx in range(len(first_row))
+            ]
+
+    columns_meta = classify_top_row_headers(header_row, data_rows)
+    if req.custom_roles and len(req.custom_roles) == len(columns_meta):
+        for idx, r_val in enumerate(req.custom_roles):
+            columns_meta[idx]["mapped_to"] = r_val
+    column_roles = [c["mapped_to"] for c in columns_meta]
+
+    mapped_rows = build_mapped_rows_from_table(
+        header_row=header_row,
+        data_rows=data_rows,
+        column_roles=column_roles,
+        default_city=req.default_city,
+        default_state=req.default_state,
+        default_zip=req.default_zip,
+        default_property_type=req.default_property_type,
+    )
+
+    return {
+        "filename": "Pasted Table",
+        "sheet_name": "Pasted Table",
+        "header_row": header_row,
+        "columns": columns_meta,
+        "data_rows": data_rows,
+        "mapped_rows": mapped_rows,
+        "total_rows": len(mapped_rows),
+    }
+
+
+@app.post("/api/batch/remap")
+async def remap_batch_columns(req: BatchRemapRequest):
+    """Re-maps loaded spreadsheet rows when the user changes a column role dropdown or default City/State."""
+    mapped_rows = build_mapped_rows_from_table(
+        header_row=req.header_row,
+        data_rows=req.data_rows,
+        column_roles=req.column_roles,
+        default_city=req.default_city,
+        default_state=req.default_state,
+        default_zip=req.default_zip,
+        default_property_type=req.default_property_type,
+    )
+    return {
+        "mapped_rows": mapped_rows,
+        "total_rows": len(mapped_rows),
+    }
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

@@ -4,11 +4,20 @@ let currentDossier = null;
 let currentToolLinks = null;
 let savedLeads = [];
 let customCore365Url = localStorage.getItem("proptrace_core365_url") || "";
+let batchSheetState = {
+  filename: "",
+  sheet_name: "",
+  header_row: [],
+  columns: [],
+  data_rows: [],
+  mapped_rows: [],
+};
 
 document.addEventListener("DOMContentLoaded", () => {
   initPropertyToggle();
   initAddressAutocomplete();
   initModals();
+  initBatchSpreadsheetHandlers();
   initDemoButtons();
   initCopyButtons();
   checkApiStatus();
@@ -19,6 +28,10 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("saveLeadBtn").addEventListener("click", handleSaveCurrentLead);
   document.getElementById("copyGeminiPromptBtn").addEventListener("click", handleCopyGeminiPrompt);
   document.getElementById("exportCsvBtn").addEventListener("click", exportLeadsToCsv);
+  const exportXlsxBtn = document.getElementById("exportXlsxBtn");
+  if (exportXlsxBtn) {
+    exportXlsxBtn.addEventListener("click", exportLeadsToXlsx);
+  }
   document.getElementById("addManualLeadBtn").addEventListener("click", handleQuickAddLead);
 
   document.getElementById("launchStage1Btn").addEventListener("click", () => launchGroup("property_tools"));
@@ -666,52 +679,328 @@ async function deleteLead(id) {
   showToast("Lead removed.");
 }
 
+const COLUMN_ROLE_OPTIONS = [
+  { value: "street", label: "📍 Street / Property Address" },
+  { value: "city", label: "🏙️ Property City" },
+  { value: "state", label: "🗺️ Property State" },
+  { value: "zip_code", label: "📮 ZIP Code" },
+  { value: "known_owner_or_llc", label: "👤 Owner / LLC / Entity Name" },
+  { value: "property_type", label: "🏢 Property Type (Res/Comm/Farm)" },
+  { value: "known_phone", label: "📱 Phone / Cell Number" },
+  { value: "mailing_address", label: "✉️ Mailing / Tax Address" },
+  { value: "parcel_apn", label: "🔢 Parcel ID / APN" },
+  { value: "notes", label: "📝 Extra Column / Keep in Notes" },
+  { value: "ignore", label: "🚫 Ignore Column" },
+];
+
+function getBatchFallbackDefaults() {
+  const dCity =
+    (document.getElementById("batchDefaultCity")?.value || "").trim() ||
+    (document.getElementById("cityInput")?.value || "").trim() ||
+    "";
+  const dState =
+    (document.getElementById("batchDefaultState")?.value || "").trim() ||
+    (document.getElementById("stateInput")?.value || "").trim() ||
+    "NC";
+  const dZip = (document.getElementById("zipInput")?.value || "").trim() || "";
+  const dType =
+    document.getElementById("batchDefaultType")?.value ||
+    document.getElementById("propertyType")?.value ||
+    "residential";
+  return { dCity, dState, dZip, dType };
+}
+
+function initBatchSpreadsheetHandlers() {
+  const dropZone = document.getElementById("batchDropZone");
+  const fileInput = document.getElementById("batchFileInput");
+  const browseBtn = document.getElementById("browseSpreadsheetBtn");
+  const parsePastedBtn = document.getElementById("parsePastedBtn");
+
+  if (!dropZone || !fileInput) return;
+
+  browseBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    fileInput.click();
+  });
+
+  dropZone.addEventListener("click", (e) => {
+    if (e.target !== browseBtn) {
+      fileInput.click();
+    }
+  });
+
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files && fileInput.files[0]) {
+      uploadBatchSpreadsheetFile(fileInput.files[0]);
+    }
+  });
+
+  dropZone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropZone.classList.add("drag-active");
+  });
+
+  dropZone.addEventListener("dragleave", () => {
+    dropZone.classList.remove("drag-active");
+  });
+
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-active");
+    if (e.dataTransfer?.files && e.dataTransfer.files[0]) {
+      uploadBatchSpreadsheetFile(e.dataTransfer.files[0]);
+    }
+  });
+
+  parsePastedBtn?.addEventListener("click", () => {
+    parseBatchPastedText();
+  });
+
+  ["batchDefaultCity", "batchDefaultState", "batchDefaultType"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener("change", () => {
+        if (batchSheetState.header_row.length) {
+          remapCurrentBatchSheet();
+        }
+      });
+    }
+  });
+}
+
+async function uploadBatchSpreadsheetFile(file) {
+  const { dCity, dState, dZip, dType } = getBatchFallbackDefaults();
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("default_city", dCity);
+  formData.append("default_state", dState);
+  formData.append("default_zip", dZip);
+  formData.append("default_property_type", dType);
+
+  const badge = document.getElementById("loadedFileBadge");
+  if (badge) {
+    badge.hidden = false;
+    badge.textContent = `⏳ Reading Row 1 headers & rows from ${file.name}...`;
+  }
+
+  try {
+    const res = await fetch("/api/batch/parse-spreadsheet", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to parse spreadsheet");
+    }
+    const data = await res.json();
+    batchSheetState = {
+      filename: data.filename,
+      sheet_name: data.sheet_name,
+      header_row: data.header_row || [],
+      columns: data.columns || [],
+      data_rows: data.data_rows || [],
+      mapped_rows: data.mapped_rows || [],
+    };
+    if (badge) {
+      badge.textContent = `✓ Loaded ${data.filename} (${data.sheet_name}) — ${data.total_rows} rows mapped from Row 1`;
+    }
+    renderBatchMappingAndPreview();
+    showToast(`Read Row 1 (${batchSheetState.header_row.length} columns) & mapped ${data.total_rows} rows!`);
+  } catch (err) {
+    if (badge) {
+      badge.textContent = `⚠️ ${err.message}`;
+    }
+    showToast(`Spreadsheet error: ${err.message}`);
+  }
+}
+
+async function parseBatchPastedText() {
+  const raw = document.getElementById("batchTextarea")?.value.trim() || "";
+  if (!raw) {
+    showToast("Paste rows from Excel or CSV into the box first!");
+    return false;
+  }
+  const { dCity, dState, dZip, dType } = getBatchFallbackDefaults();
+  try {
+    const res = await fetch("/api/batch/parse-text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        raw_text: raw,
+        default_city: dCity,
+        default_state: dState,
+        default_zip: dZip,
+        default_property_type: dType,
+      }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    batchSheetState = {
+      filename: data.filename,
+      sheet_name: data.sheet_name,
+      header_row: data.header_row || [],
+      columns: data.columns || [],
+      data_rows: data.data_rows || [],
+      mapped_rows: data.mapped_rows || [],
+    };
+    renderBatchMappingAndPreview();
+    showToast(`Mapped ${data.total_rows} rows using top row column order!`);
+    return true;
+  } catch (e) {
+    console.error(e);
+    return false;
+  }
+}
+
+function renderBatchMappingAndPreview() {
+  const sec = document.getElementById("batchMappingSection");
+  const colsContainer = document.getElementById("batchColumnsContainer");
+  const countBadge = document.getElementById("batchRowCountBadge");
+  const summaryEl = document.getElementById("batchSheetSummary");
+
+  if (!batchSheetState.columns.length) {
+    sec.hidden = true;
+    return;
+  }
+  sec.hidden = false;
+
+  countBadge.textContent = `${batchSheetState.mapped_rows.length} Rows Ready`;
+  summaryEl.textContent = `Source: ${batchSheetState.filename} (${batchSheetState.sheet_name}) • Top Row has ${batchSheetState.columns.length} columns in order (${batchSheetState.columns.map((c) => `Col ${c.col_letter}: "${c.header_name}"`).join(" → ")})`;
+
+  colsContainer.innerHTML = "";
+  batchSheetState.columns.forEach((col, idx) => {
+    const card = document.createElement("div");
+    card.className = "col-map-card";
+
+    const optionsHtml = COLUMN_ROLE_OPTIONS.map(
+      (opt) =>
+        `<option value="${opt.value}" ${col.mapped_to === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`
+    ).join("");
+
+    card.innerHTML = `
+      <div class="col-map-top">
+        <span class="col-letter-tag">Col ${escapeHtml(col.col_letter)} (#${idx + 1})</span>
+        <span class="col-header-title" title="Row 1 Header: ${escapeHtml(col.header_name)}">${escapeHtml(col.header_name)}</span>
+      </div>
+      <div class="col-sample-text" title="Row 2 Sample: ${escapeHtml(col.sample_value || "—")}">
+        Row 2: ${escapeHtml(col.sample_value || "—")}
+      </div>
+      <select class="col-role-select" data-col-index="${idx}" aria-label="Column mapping for ${escapeHtml(col.header_name)}">
+        ${optionsHtml}
+      </select>
+    `;
+
+    card.querySelector(".col-role-select").addEventListener("change", (e) => {
+      batchSheetState.columns[idx].mapped_to = e.target.value;
+      remapCurrentBatchSheet();
+    });
+
+    colsContainer.appendChild(card);
+  });
+
+  renderBatchPreviewTable();
+}
+
+function renderBatchPreviewTable() {
+  const tbody = document.getElementById("batchPreviewBody");
+  const countBadge = document.getElementById("batchRowCountBadge");
+  if (!tbody) return;
+
+  countBadge.textContent = `${batchSheetState.mapped_rows.length} Rows Ready`;
+  tbody.innerHTML = "";
+
+  batchSheetState.mapped_rows.slice(0, 50).forEach((r) => {
+    const tr = document.createElement("tr");
+    const extraInfo = [r.known_phone ? `📱 ${r.known_phone}` : "", r.notes || ""].filter(Boolean).join(" • ") || "—";
+    tr.innerHTML = `
+      <td><span class="badge">Row ${r.row_number}</span></td>
+      <td><strong>${escapeHtml(r.street || "—")}</strong></td>
+      <td>${escapeHtml(r.city || "—")}</td>
+      <td>${escapeHtml(r.state || "—")}</td>
+      <td>${escapeHtml(r.zip_code || "—")}</td>
+      <td>${escapeHtml(r.known_owner_or_llc || "—")}</td>
+      <td><span class="badge">${escapeHtml(r.property_type)}</span></td>
+      <td><small>${escapeHtml(extraInfo)}</small></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function remapCurrentBatchSheet() {
+  if (!batchSheetState.header_row.length) return;
+  const { dCity, dState, dZip, dType } = getBatchFallbackDefaults();
+  const roles = batchSheetState.columns.map((c) => c.mapped_to);
+
+  try {
+    const res = await fetch("/api/batch/remap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        header_row: batchSheetState.header_row,
+        data_rows: batchSheetState.data_rows,
+        column_roles: roles,
+        default_city: dCity,
+        default_state: dState,
+        default_zip: dZip,
+        default_property_type: dType,
+      }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    batchSheetState.mapped_rows = data.mapped_rows || [];
+    renderBatchPreviewTable();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
 async function handleBatchRun() {
-  const raw = document.getElementById("batchTextarea").value.trim();
-  if (!raw) return;
-  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // If user pasted text into textarea without clicking "Read Top Row Headers" yet, parse it automatically first
+  if (!batchSheetState.mapped_rows.length) {
+    const ok = await parseBatchPastedText();
+    if (!ok || !batchSheetState.mapped_rows.length) {
+      showToast("Upload an Excel (.xlsx/.xls) or CSV file, or paste rows above first!");
+      return;
+    }
+  }
+
+  const rowsToRun = batchSheetState.mapped_rows;
   const progBox = document.getElementById("batchProgressBox");
   const progTxt = document.getElementById("batchProgressText");
+  const runBtn = document.getElementById("runBatchBtn");
   progBox.hidden = false;
+  runBtn.disabled = true;
 
-  for (let i = 0; i < lines.length; i++) {
-    progTxt.textContent = `Processing ${i + 1} of ${lines.length}: ${lines[i]}...`;
-    const defaultCity = document.getElementById("cityInput").value.trim() || "Raleigh";
-    const defaultState = document.getElementById("stateInput").value.trim() || "NC";
-    const defaultZip = document.getElementById("zipInput").value.trim() || "";
-    const defaultType = document.getElementById("propertyType").value || "residential";
-    let street = "", city = defaultCity, state = defaultState, zip_code = defaultZip, property_type = defaultType, known_owner_or_llc = "";
+  let completed = 0;
+  for (let i = 0; i < rowsToRun.length; i++) {
+    const item = rowsToRun[i];
+    if (!item.street) continue;
 
-    if (lines[i].includes("\t-") || lines[i].includes(" -")) {
-      const dashParts = lines[i].split(/\t?-|\s+-/).map((p) => p.trim());
-      known_owner_or_llc = dashParts[0] || "";
-      street = dashParts[1] || "";
-    } else {
-      const parts = lines[i].split(",").map((p) => p.trim());
-      street = parts[0] || "";
-      city = parts[1] || defaultCity;
-      state = parts[2] || defaultState;
-      zip_code = parts[3] || defaultZip;
-      property_type = (parts[4] || defaultType).toLowerCase().includes("comm")
-        ? "commercial"
-        : (parts[4] || defaultType).toLowerCase().includes("farm")
-        ? "farm"
-        : "residential";
-      known_owner_or_llc = parts[5] || "";
-    }
+    progTxt.textContent = `Processing Sheet Row ${item.row_number} (${i + 1} of ${rowsToRun.length}): ${item.street}, ${item.city}, ${item.state} ${item.known_owner_or_llc ? `(${item.known_owner_or_llc})` : ""}...`;
 
-    if (!street) continue;
     try {
       const res = await fetch("/api/investigate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ street, city, state, zip_code, property_type, known_owner_or_llc }),
+        body: JSON.stringify({
+          street: item.street,
+          city: item.city,
+          state: item.state,
+          zip_code: item.zip_code || "",
+          property_type: item.property_type || "residential",
+          known_owner_or_llc: item.known_owner_or_llc || "",
+          known_phone: item.known_phone || "",
+        }),
       });
       if (res.ok) {
         const data = await res.json();
         const d = data.dossier;
         const allPhones = [];
-        (d.contacts || []).forEach((c) => (c.phones || []).forEach((p) => allPhones.push(p.number)));
+        const allEmails = [];
+        (d.contacts || []).forEach((c) => {
+          (c.phones || []).forEach((p) => allPhones.push(p.number));
+          (c.emails || []).forEach((em) => allEmails.push(em));
+        });
         await fetch("/api/leads", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -723,21 +1012,34 @@ async function handleBatchRun() {
             primary_phone: d.primary_phone,
             primary_phone_type: d.primary_phone_type || "Personal Cell / Direct",
             all_phones: allPhones,
+            emails: allEmails,
             mailing_address: d.tax_mailing_address,
             portfolio_count: d.portfolio_count || 1,
             portfolio_total_value: d.portfolio_total_value || "",
             confidence: d.overall_confidence,
+            notes: item.notes || "",
           }),
         });
+        completed++;
       }
     } catch (e) {
       console.error(e);
     }
   }
 
+  runBtn.disabled = false;
   await loadSavedLeads();
-  progTxt.textContent = `Completed ${lines.length} properties! Saved to Leads Table.`;
-  showToast(`Batch skip-trace complete (${lines.length} properties)!`);
+  progTxt.textContent = `✓ Completed ${completed} of ${rowsToRun.length} spreadsheet rows! All results saved to Leads Table.`;
+  showToast(`Batch skip-trace complete (${completed} properties saved)!`);
+}
+
+function exportLeadsToXlsx() {
+  if (!savedLeads.length) {
+    showToast("No saved leads to export yet!");
+    return;
+  }
+  window.location.href = "/api/leads/export-xlsx";
+  showToast("Downloading Microsoft Excel (.xlsx) workbook...");
 }
 
 function exportLeadsToCsv() {

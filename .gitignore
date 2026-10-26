@@ -14,6 +14,8 @@ config.json
 saved_leads.json
 *skip_trace_report*.md
 *.csv
+*.xlsx
+*.xls
 *.zip
 
 # OS / Editor Files
