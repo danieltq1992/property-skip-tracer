@@ -585,6 +585,31 @@ def classify_top_row_headers(header_row: List[str], data_rows: List[List[str]]) 
     return columns_meta
 
 
+US_STATE_TO_ABBR = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+    "colorado": "CO", "connecticut": "CT", "delaware": "DE", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
+    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS", "missouri": "MO",
+    "montana": "MT", "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
+    "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH",
+    "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+    "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+    "district of columbia": "DC", "washington dc": "DC",
+}
+
+
+def normalize_state_abbr(raw_state: str, default_state: str = "NC") -> str:
+    s = (raw_state or "").strip()
+    if not s:
+        s = (default_state or "NC").strip()
+    s_low = re.sub(r"[^a-z\s]", "", s.lower()).strip()
+    if s_low in US_STATE_TO_ABBR:
+        return US_STATE_TO_ABBR[s_low]
+    return s.upper()[:2]
+
+
 def normalize_property_type_value(raw_val: str, default_type: str = "residential") -> str:
     low = (raw_val or "").strip().lower()
     if not low:
@@ -680,14 +705,24 @@ def build_mapped_rows_from_table(
                     zip_val = m_full.group(4).strip()
 
         final_city = city_val or default_city.strip() or "Raleigh"
-        final_state = (state_val or default_state.strip() or "NC").upper()[:2]
+        final_state = normalize_state_abbr(state_val, default_state)
         final_zip = zip_val or default_zip.strip()
         final_owner = " / ".join(owner_parts).strip()
 
-        # Infer farm if owner has FARMS / RANCH / POULTRY and property_type wasn't explicitly set
+        # Infer farm or commercial if owner name strongly indicates it and property_type wasn't explicitly set
         inferred_default_type = default_property_type
-        if not prop_type_raw and any(k in final_owner.upper() for k in ("FARM", "RANCH", "POULTRY", "TIMBER", "AGRI")):
-            inferred_default_type = "farm"
+        if not prop_type_raw:
+            up_own = final_owner.upper()
+            if any(k in up_own for k in ("FARM", "RANCH", "POULTRY", "TIMBER", "AGRI")):
+                inferred_default_type = "farm"
+            elif any(
+                k in up_own
+                for k in (
+                    "LLC", "INC", "CORP", "LP", "LC", "LTD", "COMPANY", "CO ", "HOTEL",
+                    "MALL", "PLAZA", "STORAGE", "APARTMENTS", "CENTER", "COLLEGE", "ASSN", "CHR ",
+                )
+            ):
+                inferred_default_type = "commercial"
         final_type = normalize_property_type_value(prop_type_raw, default_type=inferred_default_type)
 
         if apn_val:
@@ -2071,109 +2106,126 @@ Live Multi-Stage Reconnaissance Snippets:
 async def suggest_addresses(q: str = "", city: str = "", state: str = ""):
     """Live US street address autocomplete returning street, city, 2-letter state, ZIP, and county."""
     query_str = q.strip()
-    if len(query_str) < 3:
+    if len(query_str) < 2:
         return {"suggestions": []}
 
-    search_line = query_str
+    scoped_line = query_str
     if city.strip() and city.strip().lower() not in query_str.lower():
-        search_line += f", {city.strip()}"
+        scoped_line += f", {city.strip()}"
     if state.strip() and state.strip().lower() not in query_str.lower():
-        search_line += f", {state.strip()}"
+        scoped_line += f", {state.strip()}"
 
     suggestions: List[Dict[str, str]] = []
     seen_keys = set()
 
-    async with httpx.AsyncClient(timeout=6.0) as client:
+    def add_suggestion(st_addr: str, c_city: str, c_state: str, c_zip: str, c_county: str = "") -> None:
+        st_addr = st_addr.strip()
+        c_city = c_city.strip()
+        c_state = c_state.strip().upper()[:2]
+        c_zip = c_zip.strip()[:5]
+        if not st_addr or not c_city or not c_state:
+            return
+        dedup_key = f"{st_addr.lower()}|{c_city.lower()}|{c_state.lower()}|{c_zip}"
+        if dedup_key in seen_keys:
+            return
+        seen_keys.add(dedup_key)
+        label = f"{st_addr}, {c_city}, {c_state} {c_zip}".strip()
+        suggestions.append(
+            {
+                "label": label,
+                "street": st_addr,
+                "city": c_city,
+                "state": c_state,
+                "zip_code": c_zip,
+                "county": c_county.strip(),
+            }
+        )
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            sug_resp = await client.get(
-                "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/suggest",
-                params={
-                    "text": search_line,
-                    "countryCode": "USA",
-                    "category": "Address,Coordinate System,Street Address",
-                    "maxSuggestions": 6,
-                    "f": "json",
-                },
-            )
-            sug_items = sug_resp.json().get("suggestions", []) if sug_resp.status_code == 200 else []
-
-            async def resolve_candidate(text_val: str, magic_key: str = ""):
-                params = {
-                    "SingleLine": text_val,
-                    "countryCode": "USA",
-                    "outFields": "StAddr,City,RegionAbbr,Postal,Subregion,PlaceName",
-                    "maxLocations": 1,
-                    "f": "json",
-                }
-                if magic_key:
-                    params["magicKey"] = magic_key
+            async def fetch_suggest_list(text_q: str) -> List[Dict[str, Any]]:
                 r = await client.get(
-                    "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates",
-                    params=params,
-                )
-                if r.status_code == 200:
-                    cands = r.json().get("candidates", [])
-                    if cands:
-                        return cands[0]
-                return None
-
-            if sug_items:
-                resolved = await asyncio.gather(
-                    *[resolve_candidate(item.get("text", ""), item.get("magicKey", "")) for item in sug_items[:6]],
-                    return_exceptions=True,
-                )
-                candidates = [c for c in resolved if isinstance(c, dict)]
-            else:
-                cand_resp = await client.get(
-                    "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates",
+                    "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/suggest",
                     params={
-                        "SingleLine": search_line,
+                        "text": text_q,
                         "countryCode": "USA",
-                        "outFields": "StAddr,City,RegionAbbr,Postal,Subregion,PlaceName",
-                        "maxLocations": 6,
+                        "category": "Address,Street Address",
+                        "maxSuggestions": 8,
                         "f": "json",
                     },
                 )
-                candidates = cand_resp.json().get("candidates", []) if cand_resp.status_code == 200 else []
+                return r.json().get("suggestions", []) if r.status_code == 200 else []
 
-            for cand in candidates:
-                attrs = cand.get("attributes", {})
-                st_addr = (attrs.get("StAddr") or "").strip()
-                c_city = (attrs.get("City") or "").strip()
-                c_state = (attrs.get("RegionAbbr") or "").strip().upper()
-                c_zip = (attrs.get("Postal") or "").strip()[:5]
-                c_county = (attrs.get("Subregion") or "").strip()
-
-                if not st_addr and cand.get("address"):
-                    parts = [p.strip() for p in cand["address"].split(",")]
-                    if parts:
-                        st_addr = parts[0]
-                        if len(parts) > 1 and not c_city:
-                            c_city = parts[1]
-
-                if not st_addr or not c_city or not c_state:
-                    continue
-
-                dedup_key = f"{st_addr.lower()}|{c_city.lower()}|{c_state.lower()}|{c_zip}"
-                if dedup_key in seen_keys:
-                    continue
-                seen_keys.add(dedup_key)
-
-                label = f"{st_addr}, {c_city}, {c_state} {c_zip}".strip()
-                suggestions.append(
-                    {
-                        "label": label,
-                        "street": st_addr,
-                        "city": c_city,
-                        "state": c_state[:2],
-                        "zip_code": c_zip,
-                        "county": c_county,
-                    }
+            # Run both scoped (with current City/State if any) and nationwide query in parallel
+            # so leftover City/State values from a prior search never block new addresses!
+            if scoped_line != query_str:
+                scoped_items, nationwide_items = await asyncio.gather(
+                    fetch_suggest_list(scoped_line),
+                    fetch_suggest_list(query_str),
+                    return_exceptions=True,
                 )
+                sug_items = (scoped_items if isinstance(scoped_items, list) else []) + (
+                    nationwide_items if isinstance(nationwide_items, list) else []
+                )
+            else:
+                sug_items = await fetch_suggest_list(query_str)
+
+            # Fast path: ArcGIS /suggest text is formatted as "309 Merchant St, Emporia, KS, 66801, USA"
+            unresolved_items: List[Dict[str, Any]] = []
+            for item in sug_items:
+                txt = (item.get("text") or "").strip()
+                parts = [p.strip() for p in txt.split(",")]
+                if len(parts) >= 4 and len(parts[2]) == 2 and re.match(r"^\d{5}", parts[3]):
+                    add_suggestion(parts[0], parts[1], parts[2], parts[3][:5], "")
+                elif len(parts) >= 3 and len(parts[2][:2].strip()) == 2:
+                    unresolved_items.append(item)
+
+            # Fallback resolution if < 6 parsed directly from suggest text
+            if len(suggestions) < 4 and (unresolved_items or not sug_items):
+                async def resolve_candidate(text_val: str, magic_key: str = ""):
+                    params = {
+                        "SingleLine": text_val,
+                        "countryCode": "USA",
+                        "outFields": "StAddr,City,RegionAbbr,Postal,Subregion,PlaceName",
+                        "maxLocations": 4,
+                        "f": "json",
+                    }
+                    if magic_key:
+                        params["magicKey"] = magic_key
+                        params["maxLocations"] = 1
+                    r = await client.get(
+                        "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates",
+                        params=params,
+                    )
+                    return r.json().get("candidates", []) if r.status_code == 200 else []
+
+                if unresolved_items:
+                    batches = await asyncio.gather(
+                        *[resolve_candidate(it.get("text", ""), it.get("magicKey", "")) for it in unresolved_items[:4]],
+                        return_exceptions=True,
+                    )
+                    cands = [c for b in batches if isinstance(b, list) for c in b]
+                else:
+                    cands = await resolve_candidate(query_str)
+
+                for cand in cands:
+                    attrs = cand.get("attributes", {})
+                    st_addr = (attrs.get("StAddr") or "").strip()
+                    c_city = (attrs.get("City") or "").strip()
+                    c_state = (attrs.get("RegionAbbr") or "").strip().upper()
+                    c_zip = (attrs.get("Postal") or "").strip()[:5]
+                    c_county = (attrs.get("Subregion") or "").strip()
+                    if not st_addr and cand.get("address"):
+                        p_list = [p.strip() for p in cand["address"].split(",")]
+                        if p_list:
+                            st_addr = p_list[0]
+                            if len(p_list) > 1 and not c_city:
+                                c_city = p_list[1]
+                    add_suggestion(st_addr, c_city, c_state, c_zip, c_county)
         except Exception:
             pass
 
-    return {"suggestions": suggestions[:6]}
+    return {"suggestions": suggestions[:8]}
 
 
 @app.get("/api/status")

@@ -15,6 +15,7 @@ saved_leads.json
 *skip_trace_report*.md
 *.csv
 *.xlsx
+*.xlsm
 *.xls
 *.zip
 

@@ -57,6 +57,7 @@ function initAddressAutocomplete() {
   const listEl = document.getElementById("addressSuggestionsList");
 
   let debounceTimer = null;
+  let abortController = null;
   let currentItems = [];
   let activeIndex = -1;
 
@@ -119,29 +120,45 @@ function initAddressAutocomplete() {
     streetInput.setAttribute("aria-expanded", "true");
   }
 
-  streetInput.addEventListener("input", () => {
+  async function triggerSuggestLookup() {
     const val = streetInput.value.trim();
     clearTimeout(debounceTimer);
-    if (val.length < 3) {
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+    if (val.length < 2) {
       closeDropdown();
       return;
     }
 
     debounceTimer = setTimeout(async () => {
+      abortController = new AbortController();
       try {
         const params = new URLSearchParams({
           q: val,
           city: cityInput.value.trim(),
           state: stateInput.value.trim(),
         });
-        const res = await fetch(`/api/address-suggest?${params.toString()}`);
+        const res = await fetch(`/api/address-suggest?${params.toString()}`, {
+          signal: abortController.signal,
+        });
         if (!res.ok) return;
         const data = await res.json();
         renderSuggestions(data.suggestions || []);
       } catch (err) {
-        console.error("Address suggest error:", err);
+        if (err.name !== "AbortError") {
+          console.error("Address suggest error:", err);
+        }
       }
-    }, 220);
+    }, 140);
+  }
+
+  streetInput.addEventListener("input", triggerSuggestLookup);
+  streetInput.addEventListener("focus", () => {
+    if (streetInput.value.trim().length >= 2 && listEl.hidden) {
+      triggerSuggestLookup();
+    }
   });
 
   streetInput.addEventListener("keydown", (e) => {
