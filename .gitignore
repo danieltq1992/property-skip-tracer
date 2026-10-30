@@ -24,3 +24,12 @@ saved_leads.json
 Thumbs.db
 .vscode/
 .idea/
+
+# Private persistent jobs and atomic-write remnants
+*.sqlite*
+*.db
+*.db-*
+batch_worker.lock
+saved_leads.json.*
+config.json.*
+.pytest_cache/

@@ -1,93 +1,71 @@
-# 🏢 PropTrace AI — Standalone Property Owner, Portfolio & Personal Cell Skip-Tracer
+# PropTrace AI — owner-first property research
 
-**PropTrace AI** is a standalone, local-first Multi-Agent Property Owner & Personal Cell Phone Skip-Tracing application for **Residential**, **Commercial**, and **Farm / Land** properties.
+PropTrace runs locally at http://127.0.0.1:8765 for residential, commercial and farm property research. A research result can remain unresolved. It does not establish a current legal owner, beneficial owner, repair authority or callable owner number without supporting records.
 
----
+## Run
 
-## 🔒 100% Standalone & Private by Design (Zero Shared Data)
+Use `Start-PropTraceAI.bat`, or from this development directory in PowerShell:
 
-Every person who downloads PropTrace AI runs it **independently on their own computer or server** (`http://127.0.0.1:8765`):
-
-- **No Shared Server:** Your instance runs 100% locally on your own machine and is never connected to anyone else's server.
-- **No Shared Leads or Phone Numbers:** All property searches, discovered owners, phone numbers, saved leads (`saved_leads.json`), and CSV exports stay strictly on your own hard drive. No other user can ever see your leads, and you will never see anyone else's leads.
-- **Bring Your Own Gemini API Key:** Each user creates and uses their own personal Google Gemini API key stored locally in `config.json` (which is excluded via `.gitignore` and never uploaded anywhere).
-- **Read-Only Upstream Source Protection:** You are free to customize your downloaded copy of the tool for your own personal workflow, but external users have **zero commit/push rights** to this repository—nothing you change locally can ever alter the master source code.
-
----
-
-## 🚀 Core Capabilities
-
-1. **📱 Personal Cell Phone Priority (Stage 3 Skip-Tracing):**
-   - Automatically prioritizes the building owner's **Personal Cell / Wireless** numbers and direct personal lines above generic business switchboards or landlines.
-   - Filters out out-of-town namesakes by cross-checking phone records against the owner's confirmed County Tax Bill Mailing Address and home city.
-2. **🏘️ Owner Property Portfolio Discovery (Stage 1 GIS & Parcel Recon):**
-   - Automatically queries County/Statewide GIS parcel records by both **Deed Owner Name** and **Tax Mailing Address** to uncover **how many total properties** the owner controls, combined assessed value, total acreage, personal homesteads, and sister LLCs.
-3. **🛡️ True Beneficial Owner, Multi-LLC Veil Piercing & HOA/Group Decision-Maker Verification (Stage 2):**
-   - Pierces single and multi-layered LLCs/Corporations by cross-referencing the **Deed Owner** $\rightarrow$ **Official County Tax Bill Mailing Address** $\rightarrow$ **Personal Homestead Deed** $\rightarrow$ **Secretary of State Officers (President / Managing Member / Registered Agent)**.
-   - Filters out commercial registered agent services (CT Corp, CSC, LegalZoom, etc.).
-   - For multi-owner groups, Churches, Condominiums, or HOAs where there is no single individual owner, automatically targets the **Building Care / Facilities Decision-Maker** (Board President, Trustee, or Property Manager).
-4. **⚡ Live Street Address Autofill & 18 One-Click Deep-Link Portals:**
-   - Type the first few characters of any US street address to auto-populate Street, City, State, ZIP, and County.
-   - Generates pre-filled deep-links for **LandGlide, Land.com, Prospect by Buildout, Regrid, OpenCorporates, CorporationWiki, B2BHint, Bizapedia, TruePeopleSearch, FastPeopleSearch, Spokeo, CyberBackgroundChecks, SearchPeopleFree**, and **Google Gemini**.
-
----
-
-## 🛠️ Easy Setup Guide (For Coworkers & New Users)
-
-### Step 1: Install Python (One-Time Prerequisite)
-Make sure **Python 3.10 or newer** is installed on your computer:
-- Download from **[python.org/downloads](https://www.python.org/downloads/)**.
-- ⚠️ **Important (Windows):** During installation, check the box that says **"Add python.exe to PATH"**.
-
----
-
-### Step 2: Download the Latest Release & Launch Your Server
-1. Go to the **[Releases](../../releases)** page of this GitHub repository.
-2. Download the latest **`PropTrace-AI-v1.0.0-Portable.zip`** (or `Source code (zip)`).
-3. Right-click the downloaded `.zip` file and click **Extract All...** to a folder on your computer (for example, `C:\PropTrace-AI`).
-4. Double-click **`Start-PropTraceAI.bat`**.
-   - On your very first launch, `Start-PropTraceAI.bat` will automatically create a local Python virtual environment (`.venv`) and install all required dependencies (`requirements.txt`).
-   - Once setup finishes, your browser will automatically open **`http://127.0.0.1:8765`**.
-
-*(Mac / Linux / Manual Terminal Users)*:
-```bash
-python -m venv .venv
-# Windows:
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python app.py
-# Mac/Linux:
-source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe app.py
 ```
 
----
+Restart the development server and refresh the browser after upgrading. Existing portable ZIPs are separate, older builds and have not been rebuilt. Run one server process per data folder; a process lock prevents competing queue workers. The server binds to localhost.
 
-### Step 3: Create & Add Your Own Free Google Gemini API Key
+## Source coverage
 
-Each user must use their own Google Gemini API key. Creating one is **free** and takes about 30 seconds:
+| Source | Actual behavior |
+| --- | --- |
+| ArcGIS World Geocoder | Automated address suggestions and address-match validation nationwide. |
+| NC OneMap county-contributed parcels | Automated point-intersection lookup only when the supplied state is NC. Street/city and any supplied APN must uniquely match. Raw record, query URL and retrieval timestamp are retained. Requires current county/deed review. |
+| Other county assessor/GIS/deed sources | Manual research; additional authorized source adapters are needed. Unsupported states never use the NC map. |
+| State business registries | Manual filing research. Registered agents, attorneys and officers are not automatically beneficial owners. |
+| OpenCorporates, Bizapedia, CorporationWiki, B2BHint | Manual portals/search links; no record retrieval or API integration is claimed. |
+| Buildout, LandGlide, Regrid, Land.com, employer tools | Manual portals; authenticated accounts/authorized APIs are not connected. |
+| TruePeopleSearch, FastPeopleSearch, Spokeo and other phone portals | Manual authorized research. No automated people-search retrieval. Owner-name links for the primary tools are nationwide. |
+| Gemini | Optional evidence-based verification suggestions using `client.aio.models.generate_content`, JSON MIME type and a Pydantic schema. Installed/tested SDK: 2.31.0. AI off is the default. AI output never changes factual dossier fields. Failures are visible. |
 
-1. Go to **[Google AI Studio — Get API Key (https://aistudio.google.com/apikey)](https://aistudio.google.com/apikey)** and sign in with your Google account.
-2. Click **"Create API Key"** and copy the generated key (it starts with `AIzaSy...`).
-3. Put the key into PropTrace AI using **any one** of these 3 methods:
-   - **Method A — Inside the App UI (Recommended):**
-     When you first open `http://127.0.0.1:8765`, the **⚙️ Bring-Your-Own Gemini API Key & Local Settings** popup will appear automatically (or click **⚙️ API Key & Settings** in the top-right corner at any time). Paste your `AIzaSy...` key and click **💾 Save API Key Locally**.
-   - **Method B — Local `config.json` File:**
-     Create a file named `config.json` in your PropTrace AI folder with:
-     ```json
-     {
-       "gemini_api_key": "AIzaSyYOUR_OWN_API_KEY_HERE"
-     }
-     ```
-   - **Method C — Environment Variable:**
-     Set the `GEMINI_API_KEY` environment variable on your system before starting the server.
+There is **no default state or city**. Single-address and batch location fields are independent. Choosing an address suggestion fills street/city/state/ZIP; manual typing or mapped spreadsheet fields also supplies location. Missing locations produce actionable errors, never Raleigh/NC fallbacks. Conservative address matching can require manual review for street aliases, rural parcels or suite-level ambiguity.
 
-> **Note:** Even before you add a Gemini API key, PropTrace AI's live GIS parcel/portfolio lookup, public web reconnaissance, and all 18 one-click skip-trace portal buttons work in **Free Recon Mode**!
+## Evidence and owner priority
 
----
+The app separates official parcel records, corporate filings, people-search records, snippets and user hints. It preserves source URLs when available, UTC retrieval timestamps, raw parcel records, role relationships and phone/person associations. Conflicting owners require review. A phone candidate is retained regardless of its area code. Corroboration requires person/address evidence, an original record and independent underlying data lineages; number order does not raise confidence. No candidate is promoted to a primary owner phone automatically.
 
-## 🔧 Customizing Your Local Copy
+Owner contact research comes first. A manager or other secondary contact requires documented repair authority after owner research is exhausted. This build does not automate that authority investigation or provide a manual source-record ingestion editor. The launchpad and saved research notes support follow-up; corporate/phone adapters can implement the modular source interface in `research.py`. Provider-supplied records must carry real provenance; do not treat an adapter fixture as a live integration.
 
-- Once you extract the release onto your computer, **it is 100% yours to customize**.
-- You can set your own custom CRM / **Core365 | via** URL inside **⚙️ API Key & Settings**, edit `app.py` or `static/app.js`, or modify the CSV export columns to match your personal workflow.
-- Because your copy runs locally and has no write access to the upstream GitHub repository, **nothing you edit or save on your machine can ever change the original repository or affect any other user**.
+## Batch workflow
+
+1. Upload `.xlsx`, `.xls`, `.csv` or a delimited text table, or paste tab-separated cells. Row 1 is always the header; only the first Excel worksheet is read. Word documents are rejected.
+2. Review field mappings and the first 50 mapped rows. Full addresses containing suites and hyphenated house numbers are retained. Tax mailing fields remain hints, never the subject property address. Fallback city/state values apply only when explicitly entered in the batch dialog.
+3. Submit the preview to the SQLite queue. Every nonempty source row is retained, including invalid rows and duplicate properties. Current limits are 10 MB uploads, 10,000 data rows and 128 columns per job.
+4. Monitor row-level status. Closing the browser does not interrupt server work. Pause finishes the active row, then stops. Resume processes pending rows; retry requeues failed rows without rerunning successes. After a server restart, interrupted jobs are paused and the active row is returned to pending. Select the saved job and resume it.
+5. Export every row to Excel, including failures, invalid inputs, duplicates, source evidence and original hints. A completed research attempt can require manual review; it does not mean a verified phone was found.
+
+Queue concurrency is one active row with a 1.5-second interval; shared public-source requests are bounded to three. HTTP 429/503 Retry-After cooldowns suppress further requests to the throttled host; retry failed rows after service recovery. The cooldown is in-memory and resets on restart. Source calls and row work have timeouts.
+
+Saved research uses deterministic property identifiers and atomic JSON writes. Retry replay returns an existing lead and preserves manual edits. It does not merge or delete older duplicate records. It also does not silently replace previously saved evidence for the same property; each batch attempt retains its own dossier in SQLite.
+
+## Local data and privacy
+
+Private files stay outside Git: `config.json`, `saved_leads.json`, `batch_jobs.sqlite3` and its WAL/SHM files, plus exports. Settings updates preserve unrelated keys. Invalid saved-lead JSON blocks saving instead of silently replacing data. Do not delete the SQLite WAL/SHM files while the app is running; stop the server before making a consistent backup. Lead JSON and settings are written through flushed temporary files and atomic replacement.
+
+Address queries go to the geocoder and applicable parcel service. Enabling AI sends retrieved evidence to Google; portal links send the selected queries to external services. Keys are stored locally in plain-text configuration and are not returned in status responses or logged by application code. This is a single-user local app, not a multi-user deployment. Cross-origin browser writes and unexpected Host headers are rejected.
+
+Existing saved leads are preserved as historical user data. Their old confidence claims are not retroactively reverified. Review their evidence before use.
+
+## Verification
+
+Run from this development directory:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+node --test tests/autocomplete.test.cjs
+node --check static/app.js
+.\.venv\Scripts\python.exe -m compileall -q app.py research.py jobs.py tests
+```
+
+The tests use synthetic properties, mocked source responses and temporary storage. They do not research private people. Browser verification uses an isolated server with synthetic source records. TestClient emits an upstream Starlette/httpx deprecation warning; the tests pass.
+
+API format reference: https://googleapis.github.io/python-genai/
+Parcel service metadata: https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/FeatureServer/1

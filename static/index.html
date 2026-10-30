@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PropTrace AI — Commercial & Residential Property Owner & Phone Skip-Tracer</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/static/styles.css?v=2" />
 </head>
 <body>
   <header class="topbar">
@@ -12,7 +13,7 @@
       <div class="brand-icon">🏢</div>
       <div>
         <h1>PropTrace AI</h1>
-        <p class="subtitle">Multi-Agent Commercial &amp; Residential Property Owner + Phone Skip-Tracing</p>
+        <p class="subtitle">Property ownership evidence and authorized contact research</p>
       </div>
     </div>
     <div class="topbar-actions">
@@ -50,6 +51,7 @@
               <input
                 type="text"
                 id="streetInput"
+                role="combobox"
                 name="street-address"
                 autocomplete="off"
                 placeholder="Start typing e.g. 309 Merchant St or 1200 County Rd..."
@@ -100,9 +102,8 @@
             <div class="form-group flex-1">
               <label for="modelSelect">AI Agent Model</label>
               <select id="modelSelect" name="agent-model" autocomplete="off">
-                <option value="gemini-3.8-flash">Gemini 3.8 Flash (Fast Agentic)</option>
-                <option value="gemini-4-argon">Gemini 4 Argon (Deep Reasoning)</option>
-                <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (High Speed)</option>
+                <option value="disabled">AI off — evidence research only</option>
+                <option value="gemini-flash-latest">Gemini Flash — optional advice</option>
               </select>
             </div>
           </div>
@@ -133,7 +134,7 @@
           <div class="form-footer">
             <label class="checkbox-label">
               <input type="checkbox" id="autoOpenTabsCheckbox" />
-              <span>Auto-launch top free skip-trace tabs (Regrid, TruePeopleSearch, FastPeopleSearch) in browser</span>
+              <span>Open property research portals in browser (manual lookup)</span>
             </label>
 
             <div class="action-buttons">
@@ -141,7 +142,7 @@
               <button type="button" id="sampleCommercialBtn" class="btn btn-ghost">Try Commercial Demo</button>
               <button type="button" id="sampleResidentialBtn" class="btn btn-ghost">Try Residential Demo</button>
               <button type="submit" id="runAgentsBtn" class="btn btn-primary">
-                🚀 Run AI Skip-Trace Agents
+                Research owner evidence
               </button>
             </div>
           </div>
@@ -151,7 +152,7 @@
       <!-- 3-Agent Pipeline Status Card -->
       <div class="card pipeline-card">
         <div class="card-header">
-          <h2>🤖 Multi-Agent Skip-Trace Pipeline</h2>
+          <h2>Owner-first research status</h2>
           <span id="pipelineTimer" class="badge">Ready</span>
         </div>
 
@@ -160,11 +161,11 @@
             <div class="step-indicator">1</div>
             <div class="step-body">
               <div class="step-title-row">
-                <h3>Agent 1: Property, Farm &amp; Parcel Recon</h3>
+                <h3>1. Address and official parcel evidence</h3>
                 <span class="step-status" id="statusAgent1">Idle</span>
               </div>
               <p class="step-tools">Tools: LandGlide • Land.com • Prospect by Buildout • Regrid • County Assessor • LoopNet</p>
-              <p class="step-output" id="outputAgent1">Identifies parcel APN, farm/acreage owner or deed owner of record, and tax mailing address.</p>
+              <p class="step-output" id="outputAgent1">Geocodes nationwide. Queries NC parcel data only when NC is explicitly supplied; other counties require configured adapters or manual review.</p>
             </div>
           </div>
 
@@ -172,11 +173,11 @@
             <div class="step-indicator">2</div>
             <div class="step-body">
               <div class="step-title-row">
-                <h3>Agent 2: Corporate &amp; LLC Veil Piercer</h3>
+                <h3>2. Corporate ownership review</h3>
                 <span class="step-status" id="statusAgent2">Idle</span>
               </div>
               <p class="step-tools">Tools: OpenCorporates • CorporationWiki • B2BHint • Bizapedia • State SOS</p>
-              <p class="step-output" id="outputAgent2">Unmasks LLCs, Corporations &amp; Trusts to find the human Managing Member, Officer, or Registered Agent.</p>
+              <p class="step-output" id="outputAgent2">Official filings can establish roles. Agents and attorneys are not presumed owners; manual research required.</p>
             </div>
           </div>
 
@@ -184,11 +185,11 @@
             <div class="step-indicator">3</div>
             <div class="step-body">
               <div class="step-title-row">
-                <h3>Agent 3: People Search &amp; Phone Skip-Tracer</h3>
+                <h3>3. Owner phone research</h3>
                 <span class="step-status" id="statusAgent3">Idle</span>
               </div>
               <p class="step-tools">Tools: TruePeopleSearch • FastPeopleSearch • Spokeo • CyberBackgroundChecks • Gemini Search</p>
-              <p class="step-output" id="outputAgent3">Cross-references wireless &amp; landline numbers, emails, and residential addresses for the decision maker.</p>
+              <p class="step-output" id="outputAgent3">Manual authorized tools help research the owner nationwide. Phone candidates require person-specific evidence.</p>
             </div>
           </div>
         </div>
@@ -203,7 +204,7 @@
           <p id="dossierSubtitle" class="subtitle"></p>
         </div>
         <div class="header-right">
-          <span id="confidenceBadge" class="badge badge-success">High Confidence</span>
+          <span id="confidenceBadge" class="badge badge-success">Needs verification</span>
           <button type="button" id="copyGeminiPromptBtn" class="btn btn-outline" title="Copies a deep skip-trace prompt to clipboard and opens Google Gemini">
             ✨ Copy Prompt &amp; Open Gemini
           </button>
@@ -215,7 +216,7 @@
 
       <div class="dossier-summary-grid">
         <div class="summary-box highlight-box">
-          <span class="summary-label">Verified Decision Maker (Person to Call)</span>
+          <span class="summary-label">Owner contact — verify before outreach</span>
           <div class="summary-value-row">
             <strong id="resDecisionMaker" class="summary-main-value">—</strong>
             <button type="button" class="copy-mini-btn" data-copy-target="resDecisionMaker">Copy</button>
@@ -234,7 +235,7 @@
         </div>
 
         <div class="summary-box">
-          <span class="summary-label">Deed Owner of Record / LLC</span>
+          <span class="summary-label">Owner from matched official parcel record</span>
           <div class="summary-value-row">
             <strong id="resOwnerOfRecord" class="summary-main-value">—</strong>
             <button type="button" class="copy-mini-btn" data-copy-target="resOwnerOfRecord">Copy</button>
@@ -254,7 +255,7 @@
         <div class="summary-box highlight-portfolio-box">
           <span class="summary-label">Owner Real Estate Portfolio</span>
           <div class="summary-value-row">
-            <strong id="resPortfolioCount" class="summary-portfolio-value">1 Property</strong>
+            <strong id="resPortfolioCount" class="summary-portfolio-value">Not researched</strong>
           </div>
           <span id="resPortfolioValue" class="summary-subtext"></span>
         </div>
@@ -263,16 +264,18 @@
       <!-- True Beneficial Owner & Multi-LLC / HOA Verification Chain -->
       <div class="verification-chain-box">
         <div class="verification-header">
-          <h4>🛡️ True Beneficial Owner &amp; Multi-LLC / Decision-Maker Verification</h4>
-          <span id="resStructureType" class="badge badge-purple">Direct / Pierced Ownership</span>
+          <h4>Ownership evidence and unresolved questions</h4>
+          <span id="resStructureType" class="badge badge-purple">Needs verification</span>
         </div>
         <p id="resVerificationProof" class="verification-proof-text"></p>
         <div id="shellLayersList" class="shell-layers-chain"></div>
       </div>
 
+      <section class="next-steps-box"><h3>Sources, candidates and verification status</h3><div id="evidencePanel"></div></section>
+
       <!-- Contacts & Extracted Phones Breakdown (Personal Cell First) -->
       <div class="contacts-section">
-        <h3>📞 Verified Decision-Makers, Officers &amp; Phone Numbers (Personal Cell Prioritized)</h3>
+        <h3>📞 Owner contacts and associated phone candidates</h3>
         <div id="contactsList" class="contacts-grid"></div>
       </div>
 
@@ -300,8 +303,8 @@
         <div>
           <h2>🔗 Interactive Skip-Trace Tool Launchpad (Your 10 Bookmarks + Bonus Portals)</h2>
           <p class="subtitle">
-            Every button below automatically updates with the target address, discovered LLC/Corp name, and the owner's personal home city &amp; street.
-            Clicking any button also copies its target search query to your clipboard for instant pasting into login portals.
+            Portal queries use the subject address and any owner supported by retrieved evidence. Address searches are clues, not proof of residence.
+            These are manual portals, not automatic integrations. Opening a portal does not establish that a search was completed.
           </p>
         </div>
         <div class="bulk-launch-buttons">
@@ -352,7 +355,7 @@
       <div class="card-header">
         <div>
           <h2>📊 Saved Property Leads &amp; Core365 / CSV Export</h2>
-          <p class="subtitle">Save verified owners, portfolios, and personal cell numbers as you research, then export to CSV/Excel.</p>
+          <p class="subtitle">Save research records with their verification status, then export to CSV/Excel.</p>
         </div>
         <div class="header-right">
           <button type="button" id="addManualLeadBtn" class="btn btn-outline">➕ Quick-Add Lead</button>
@@ -368,7 +371,7 @@
               <th>Property Address</th>
               <th>Type</th>
               <th>Deed Owner / LLC</th>
-              <th>Verified Decision Maker</th>
+              <th>Owner / contact (check evidence)</th>
               <th>Personal Cell / Phones</th>
               <th>Portfolio</th>
               <th>Tax / Home Mailing Address</th>
@@ -395,7 +398,7 @@
       </div>
       <div class="dialog-body">
         <p>
-          PropTrace AI runs <strong>100% standalone on your own computer/server</strong>. All searches, API keys (<code>config.json</code>), and saved leads (<code>saved_leads.json</code>) remain strictly private on your local machine and are never shared with any other user.
+          PropTrace AI runs <strong>100% standalone on your own computer/server</strong>. Saved leads and settings are stored locally. Address lookups send the subject address to the geocoder and applicable parcel service. Optional AI sends retrieved evidence to Google. Manual portals receive the queries you open.
         </p>
         <div class="next-steps-box" style="margin-bottom: 14px;">
           <h4>🔑 How to Get Your Own Free Google Gemini API Key (Takes 30 Seconds)</h4>
@@ -414,7 +417,7 @@
             autocomplete="off"
           />
           <small class="help-text">
-            Saved exclusively in your local <code>config.json</code> (git-ignored). Even without an API key, all 18 automated skip-trace deep-links and public GIS/web scrapers work 100% free!
+            Saved exclusively in your local <code>config.json</code> (git-ignored). AI is optional. Portal buttons open manual research tools and do not retrieve their records automatically.
           </small>
         </div>
         <div class="form-group">
@@ -454,7 +457,7 @@
           <input
             type="file"
             id="batchFileInput"
-            accept=".xlsx,.xlsm,.xls,.csv,.tsv,.txt"
+            accept=".xlsx,.xls,.csv,.tsv,.txt"
             hidden
           />
           <button type="button" id="browseSpreadsheetBtn" class="btn btn-primary" style="margin-top: 8px;">
@@ -468,7 +471,7 @@
           <textarea
             id="batchTextarea"
             rows="4"
-            placeholder="Owner&#9;Address&#9;City&#9;State&#10;Apex Holdings LLC&#9;1100 Congress Ave&#9;Austin&#9;TX&#10;Green Valley Farms Inc&#9;450 County Rd 12&#9;Raleigh&#9;NC"
+            placeholder="Owner&#9;Address&#9;City&#9;State&#10;Apex Holdings LLC&#9;1100 Congress Ave&#9;Austin&#9;TX&#10;Green Valley Farms Inc&#9;450 County Rd 12&#9;Austin&#9;TX"
           ></textarea>
           <button type="button" id="parsePastedBtn" class="btn btn-secondary" style="margin-top: 6px; width: 100%;">
             🔍 Read Top Row Headers &amp; Map Pasted Rows
@@ -481,7 +484,7 @@
         <span class="defaults-label">Fallback Values (used only if your spreadsheet doesn't have a City / State column):</span>
         <div class="defaults-inputs">
           <input type="text" id="batchDefaultCity" placeholder="Default City (if not in sheet)" />
-          <input type="text" id="batchDefaultState" placeholder="State (e.g. NC)" maxlength="2" style="width: 80px;" />
+          <input type="text" id="batchDefaultState" placeholder="State (blank unless supplied)" maxlength="2" style="width: 80px;" />
           <select id="batchDefaultType">
             <option value="residential">Default: Residential</option>
             <option value="commercial">Default: Commercial</option>
@@ -527,8 +530,20 @@
         </div>
       </div>
 
+      <section class="next-steps-box">
+        <label for="batchJobSelect">Saved batch jobs (survive browser and server restarts)</label>
+        <select id="batchJobSelect" aria-label="Saved batch jobs"></select>
+        <div class="action-buttons">
+          <button type="button" id="batchCancelBtn" class="btn btn-outline">Pause after active row</button>
+          <button type="button" id="batchResumeBtn" class="btn btn-secondary">Resume pending rows</button>
+          <button type="button" id="batchRetryBtn" class="btn btn-secondary">Retry failed rows</button>
+          <a id="batchExportLink" class="btn btn-outline">Export every row to Excel</a>
+        </div>
+        <p>After a server interruption, select the saved job and resume. Unresolved results stay visible and need manual verification.</p>
+        <ul id="batchRowStatus" style="max-height:220px;overflow:auto"></ul>
+      </section>
       <div id="batchProgressBox" class="batch-progress" hidden>
-        <span id="batchProgressText">Processing 0 / 0...</span>
+        <span id="batchProgressText" role="status" aria-live="polite">Processing 0 / 0...</span>
       </div>
     </div>
     <div class="dialog-footer">
@@ -537,6 +552,6 @@
     </div>
   </dialog>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=2"></script>
 </body>
 </html>

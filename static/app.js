@@ -23,6 +23,11 @@ document.addEventListener("DOMContentLoaded", () => {
   checkApiStatus();
   loadSavedLeads();
   renderDefaultLaunchpad();
+  restoreBatchJobs();
+  document.getElementById("batchJobSelect").addEventListener("change", e => { activeBatchJob = e.target.value; pollBatchJob(); });
+  document.getElementById("batchCancelBtn").addEventListener("click", () => batchAction("cancel"));
+  document.getElementById("batchResumeBtn").addEventListener("click", () => batchAction("resume"));
+  document.getElementById("batchRetryBtn").addEventListener("click", () => batchAction("retry"));
 
   document.getElementById("skipTraceForm").addEventListener("submit", handleInvestigateSubmit);
   document.getElementById("saveLeadBtn").addEventListener("click", handleSaveCurrentLead);
@@ -60,13 +65,18 @@ function initAddressAutocomplete() {
   let abortController = null;
   let currentItems = [];
   let activeIndex = -1;
+  let requestGeneration = 0;
 
   function closeDropdown() {
+    requestGeneration++;
+    clearTimeout(debounceTimer);
+    abortController?.abort();
     listEl.hidden = true;
     listEl.innerHTML = "";
     streetInput.setAttribute("aria-expanded", "false");
     currentItems = [];
     activeIndex = -1;
+    streetInput.removeAttribute("aria-activedescendant");
   }
 
   function selectSuggestion(item) {
@@ -99,6 +109,8 @@ function initAddressAutocomplete() {
       li.className = "autocomplete-item";
       li.setAttribute("role", "option");
       li.dataset.index = idx;
+      li.id = `address-option-${idx}`;
+      li.setAttribute("aria-selected", "false");
 
       li.innerHTML = `
         <div class="autocomplete-main">
@@ -108,7 +120,7 @@ function initAddressAutocomplete() {
         ${item.county ? `<span class="autocomplete-county">${escapeHtml(item.county)}</span>` : ""}
       `;
 
-      li.addEventListener("mousedown", (e) => {
+      li.addEventListener("pointerdown", (e) => {
         e.preventDefault();
         selectSuggestion(item);
       });
@@ -132,6 +144,7 @@ function initAddressAutocomplete() {
       return;
     }
 
+    const generation = ++requestGeneration;
     debounceTimer = setTimeout(async () => {
       abortController = new AbortController();
       try {
@@ -145,6 +158,7 @@ function initAddressAutocomplete() {
         });
         if (!res.ok) return;
         const data = await res.json();
+        if (generation !== requestGeneration || streetInput.value.trim() !== val) return;
         renderSuggestions(data.suggestions || []);
       } catch (err) {
         if (err.name !== "AbortError") {
@@ -162,17 +176,20 @@ function initAddressAutocomplete() {
   });
 
   streetInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { closeDropdown(); return; }
     if (listEl.hidden || !currentItems.length) return;
     const optionEls = listEl.querySelectorAll(".autocomplete-item");
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
       activeIndex = (activeIndex + 1) % currentItems.length;
-      optionEls.forEach((el, i) => el.classList.toggle("active", i === activeIndex));
+      optionEls.forEach((el, i) => { el.classList.toggle("active", i === activeIndex); el.setAttribute("aria-selected", String(i === activeIndex)); });
+      streetInput.setAttribute("aria-activedescendant", `address-option-${activeIndex}`);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       activeIndex = (activeIndex - 1 + currentItems.length) % currentItems.length;
-      optionEls.forEach((el, i) => el.classList.toggle("active", i === activeIndex));
+      optionEls.forEach((el, i) => { el.classList.toggle("active", i === activeIndex); el.setAttribute("aria-selected", String(i === activeIndex)); });
+      streetInput.setAttribute("aria-activedescendant", `address-option-${activeIndex}`);
     } else if (e.key === "Enter" && activeIndex >= 0) {
       e.preventDefault();
       selectSuggestion(currentItems[activeIndex]);
@@ -253,18 +270,12 @@ async function checkApiStatus() {
     const data = await res.json();
     const badge = document.getElementById("apiStatusBadge");
     if (data.has_api_key) {
-      badge.textContent = `✓ Gemini API Active (${data.masked_key})`;
+      badge.textContent = `Gemini key configured (${data.masked_key})`;
       badge.className = "status-pill status-ok";
     } else {
-      badge.textContent = "⚡ Free Recon Mode (Click to Add Your Gemini Key)";
+      badge.textContent = "Evidence research • AI optional";
       badge.className = "status-pill status-warn";
-      if (!localStorage.getItem("proptrace_onboarded")) {
-        localStorage.setItem("proptrace_onboarded", "1");
-        const settingsDialog = document.getElementById("settingsDialog");
-        if (settingsDialog && !settingsDialog.open) {
-          settingsDialog.showModal();
-        }
-      }
+
     }
   } catch (err) {
     console.error(err);
@@ -338,6 +349,7 @@ function setPipelineState(stageNum, state, message) {
 
 async function handleInvestigateSubmit(e) {
   e.preventDefault();
+  if (document.getElementById("runAgentsBtn").disabled) return;
   const payload = {
     street: document.getElementById("streetInput").value.trim(),
     city: document.getElementById("cityInput").value.trim(),
@@ -353,12 +365,12 @@ async function handleInvestigateSubmit(e) {
   const runBtn = document.getElementById("runAgentsBtn");
   const timerBadge = document.getElementById("pipelineTimer");
   runBtn.disabled = true;
-  runBtn.textContent = "⏳ Investigating Property & Piercing Entities...";
-  timerBadge.textContent = "Agents Active";
+  runBtn.textContent = "Checking address and parcel evidence…";
+  timerBadge.textContent = "Retrieving evidence";
 
   setPipelineState(1, "running", `Searching parcel, farm & deed records for ${payload.street}, ${payload.city}, ${payload.state}...`);
-  setPipelineState(2, "running", "Querying OpenCorporates, CorporationWiki & B2BHint for corporate principals...");
-  setPipelineState(3, "running", "Cross-referencing TruePeopleSearch, FastPeopleSearch, Spokeo & public records...");
+  setPipelineState(2, "running", "Corporate portals are manual research tools; no automated filing search configured.");
+  setPipelineState(3, "running", "Phone portals require manual authorized research; candidate numbers stay unverified.");
 
   try {
     const res = await fetch("/api/investigate", {
@@ -377,7 +389,7 @@ async function handleInvestigateSubmit(e) {
     setPipelineState(1, "done", currentDossier.agent_1_property_findings);
     setPipelineState(2, "done", currentDossier.agent_2_entity_findings);
     setPipelineState(3, "done", currentDossier.agent_3_phone_findings);
-    timerBadge.textContent = "Investigation Complete";
+    timerBadge.textContent = "Research attempt complete";
 
     renderDossier(currentDossier);
     renderLaunchpad(currentToolLinks);
@@ -387,7 +399,7 @@ async function handleInvestigateSubmit(e) {
     timerBadge.textContent = "Error";
   } finally {
     runBtn.disabled = false;
-    runBtn.textContent = "🚀 Run AI Skip-Trace Agents";
+    runBtn.textContent = "Research owner evidence";
   }
 }
 
@@ -401,11 +413,11 @@ function renderDossier(dossier) {
   document.getElementById("confidenceBadge").textContent = dossier.overall_confidence;
   document.getElementById("resDecisionMaker").textContent = dossier.primary_decision_maker || "—";
   document.getElementById("resDecisionMakerRole").textContent = dossier.decision_maker_role_and_authority || "";
-  document.getElementById("resPrimaryPhone").textContent = dossier.primary_phone || "Use Stage 3 Free Links Below";
+  document.getElementById("resPrimaryPhone").textContent = dossier.primary_phone || "No verified primary phone";
   document.getElementById("resPrimaryPhoneType").textContent =
     dossier.primary_phone_type || "📱 Personal Cell / Direct Owner Line";
   document.getElementById("resOwnerOfRecord").textContent = dossier.owner_of_record || "—";
-  document.getElementById("resMailingAddress").textContent = dossier.tax_mailing_address || dossier.normalized_address;
+  document.getElementById("resMailingAddress").textContent = dossier.tax_mailing_address || "Not established";
   document.getElementById("resParcelApn").textContent = `APN: ${dossier.parcel_apn || "See Regrid/LandGlide/Land.com"}`;
   document.getElementById("resRegisteredAgent").textContent =
     dossier.registered_agent_name ? `Officers / Agent: ${dossier.registered_agent_name}` : "";
@@ -415,15 +427,17 @@ function renderDossier(dossier) {
       : "Individual / Direct Ownership";
 
   // Portfolio Summary Box
-  const pCount = dossier.portfolio_count || 1;
+  const pCount = dossier.portfolio_count || 0;
   document.getElementById("resPortfolioCount").textContent =
-    `${pCount} ${pCount === 1 ? "Property" : "Properties"} Owned`;
+    pCount ? `${pCount} properties supported` : "Not researched";
   document.getElementById("resPortfolioValue").textContent =
     dossier.portfolio_total_value || dossier.assessed_value_and_acres || "See Portfolio Below";
 
+  renderEvidence(dossier);
+
   // Ownership Verification Chain
   document.getElementById("resStructureType").textContent =
-    dossier.ownership_structure_type || "Verified Ownership";
+    dossier.ownership_structure_type || "Needs verification";
   document.getElementById("resVerificationProof").textContent =
     dossier.decision_maker_verification_proof || "";
   const layersEl = document.getElementById("shellLayersList");
@@ -449,11 +463,11 @@ function renderDossier(dossier) {
               ${p.is_personal_cell ? `<span class="cell-tag">📱 PERSONAL CELL / DIRECT</span>` : ""}
               <div class="subtitle">${escapeHtml(p.phone_type)} • ${escapeHtml(p.carrier_or_source)}</div>
             </div>
-            <button type="button" class="copy-mini-btn" onclick="navigator.clipboard.writeText('${escapeHtml(p.number)}'); showToast('Copied phone!')">Copy</button>
+            <button type="button" class="copy-mini-btn" data-phone-copy="${escapeHtml(p.number)}">Copy</button>
           </div>`
           )
           .join("")
-      : `<div class="phone-item"><span class="subtitle">Click TruePeopleSearch or FastPeopleSearch below for instant free wireless/cell numbers</span></div>`;
+      : `<div class="phone-item"><span class="subtitle">No associated phone records. Verify candidates through authorized tools.</span></div>`;
 
     card.innerHTML = `
       <div class="contact-card-header">
@@ -461,11 +475,12 @@ function renderDossier(dossier) {
         <span class="badge ${c.is_primary_decision_maker || idx === 0 ? "badge-success" : ""}">${escapeHtml(c.role)}</span>
       </div>
       ${c.verification_evidence ? `<div class="contact-evidence">✓ ${escapeHtml(c.verification_evidence)}</div>` : ""}
-      <div class="subtitle">📍 Tax / Home Address: ${escapeHtml(c.mailing_or_home_address || dossier.normalized_address)}</div>
+      <div class="subtitle">📍 Tax / Home Address: ${escapeHtml(c.mailing_or_home_address || "Not established")}</div>
       ${c.emails && c.emails.length ? `<div class="subtitle">✉️ Email(s): ${escapeHtml(c.emails.join(", "))}</div>` : ""}
       ${c.relatives_or_associates && c.relatives_or_associates.length ? `<div class="subtitle">👥 Associated Co-Owners / Relatives: ${escapeHtml(c.relatives_or_associates.join(", "))}</div>` : ""}
       <div class="phone-list">${phonesHtml}</div>
     `;
+    card.querySelectorAll("[data-phone-copy]").forEach(button => button.addEventListener("click", () => navigator.clipboard.writeText(button.dataset.phoneCopy).catch(() => showToast("Copy failed. Select the number to copy it manually."))));
     contactsContainer.appendChild(card);
   });
 
@@ -491,7 +506,7 @@ function renderDossier(dossier) {
       portGrid.appendChild(pCard);
     });
   } else {
-    portGrid.innerHTML = `<div class="portfolio-card"><span class="portfolio-meta">Target property is the primary parcel on record for this entity/address.</span></div>`;
+    portGrid.innerHTML = `<div class="portfolio-card"><span class="portfolio-meta">Additional property ownership has not been established.</span></div>`;
   }
 
   // Next Steps
@@ -550,7 +565,7 @@ function renderToolColumn(containerId, tools) {
     a.innerHTML = `
       <div class="tool-card-top">
         <span class="tool-name">↗ ${escapeHtml(tool.name)}</span>
-        <span class="tool-badge ${tool.source_type === "screenshot" ? "screenshot" : "bonus"}">${escapeHtml(tool.badge)}</span>
+        <span class="tool-badge ${tool.source_type === "screenshot" ? "screenshot" : "bonus"}">${escapeHtml(tool.access_mode === "manual_portal" ? tool.badge : "Manual portal")}</span>
       </div>
       <p class="tool-desc">${escapeHtml(tool.description)}</p>
     `;
@@ -615,21 +630,27 @@ function renderLeadsTable() {
       .filter(Boolean)
       .filter((v, i, arr) => arr.indexOf(v) === i)
       .join(", ");
-    const pCount = lead.portfolio_count || 1;
+    const pCount = lead.portfolio_count || 0;
     const pBadge = `${pCount} ${pCount === 1 ? "Prop" : "Props"}${lead.portfolio_total_value ? ` (${lead.portfolio_total_value})` : ""}`;
 
     tr.innerHTML = `
       <th>${escapeHtml(lead.address)}</th>
       <td><span class="badge">${escapeHtml(lead.property_type)}</span></td>
-      <td>${escapeHtml(lead.owner_of_record)}</td>
+      <td>${escapeHtml(lead.owner_of_record || "Unresolved")}<br><small>${escapeHtml(lead.confidence || "Legacy record — verification unknown")}</small></td>
       <td><strong>${escapeHtml(lead.decision_maker)}</strong></td>
       <td><strong style="color:#34d399">${escapeHtml(phonesDisplay || "—")}</strong></td>
       <td><span class="badge badge-purple">${escapeHtml(pBadge)}</span></td>
       <td>${escapeHtml(lead.mailing_address || "—")}</td>
       <td>
-        <button type="button" class="copy-mini-btn" onclick="deleteLead('${escapeHtml(lead.id)}')">🗑️ Delete</button>
+        <button type="button" class="copy-mini-btn" data-delete-lead="${escapeHtml(lead.id)}">🗑️ Delete</button>
       </td>
     `;
+    tr.querySelector("[data-delete-lead]").addEventListener("click", () => deleteLead(lead.id));
+    if (lead.dossier && Object.keys(lead.dossier).length) {
+      const view = document.createElement("button"); view.type = "button"; view.className = "copy-mini-btn"; view.textContent = "View evidence";
+      view.addEventListener("click", () => { currentDossier = lead.dossier; renderDossier(lead.dossier); document.getElementById("dossierSection").scrollIntoView({behavior:"smooth"}); });
+      tr.lastElementChild.appendChild(view);
+    }
     tbody.appendChild(tr);
   });
 }
@@ -653,47 +674,49 @@ async function handleSaveCurrentLead() {
     all_phones: allPhones,
     emails: allEmails,
     mailing_address: currentDossier.tax_mailing_address,
-    portfolio_count: currentDossier.portfolio_count || 1,
+    portfolio_count: currentDossier.portfolio_count || 0,
     portfolio_total_value: currentDossier.portfolio_total_value || "",
     confidence: currentDossier.overall_confidence,
+    evidence: currentDossier.evidence || [],
+    dossier: currentDossier,
   };
 
-  await fetch("/api/leads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  await loadSavedLeads();
-  showToast("Lead saved to table!");
+  const button = document.getElementById("saveLeadBtn");
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    await apiJson("/api/leads", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    await loadSavedLeads(); showToast("Research record saved.");
+  } catch (error) { showToast(`Save failed: ${error.message}`); }
+  finally { button.disabled = false; }
+
 }
 
 async function handleQuickAddLead() {
-  const street = document.getElementById("streetInput").value.trim() || "Custom Property";
+  const street = document.getElementById("streetInput").value.trim();
   const city = document.getElementById("cityInput").value.trim();
   const state = document.getElementById("stateInput").value.trim();
-  const owner = document.getElementById("knownOwnerInput").value.trim() || "Unknown Owner";
-  const phone = document.getElementById("knownPhoneInput").value.trim() || "";
-
-  await fetch("/api/leads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      address: `${street}, ${city}, ${state}`.replace(/^,\s*/, ""),
-      property_type: document.getElementById("propertyType").value,
-      owner_of_record: owner,
-      decision_maker: owner,
-      primary_phone: phone,
-      mailing_address: `${street}, ${city}, ${state}`.replace(/^,\s*/, ""),
-    }),
-  });
-  await loadSavedLeads();
-  showToast("Added lead to table!");
+  if (!street || !city || !state) { showToast("Enter the subject street, city and state before saving."); return; }
+  const owner = document.getElementById("knownOwnerInput").value.trim();
+  const phone = document.getElementById("knownPhoneInput").value.trim();
+  const button = document.getElementById("addManualLeadBtn");
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    await apiJson("/api/leads", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      address:`${street}, ${city}, ${state}`, property_type:document.getElementById("propertyType").value,
+      owner_of_record:"", decision_maker:"", primary_phone:"", all_phones:phone ? [phone] : [],
+      confidence:"Unverified user hints", notes:`Owner hint: ${owner}. Phone hint: ${phone}. Neither association is verified.`,
+      evidence:[{kind:"user_hint",source:"User input",retrieved_at:new Date().toISOString(),owner,number:phone,verification_status:"unverified"}]
+    })});
+    await loadSavedLeads(); showToast("Saved as unverified research hints.");
+  } catch (error) { showToast(`Save failed: ${error.message}`); }
+  finally { button.disabled = false; }
 }
 
 async function deleteLead(id) {
-  await fetch(`/api/leads/${id}`, { method: "DELETE" });
-  await loadSavedLeads();
-  showToast("Lead removed.");
+  try { await apiJson(`/api/leads/${encodeURIComponent(id)}`, {method:"DELETE"}); await loadSavedLeads(); showToast("Lead removed."); }
+  catch (error) { showToast(`Delete failed: ${error.message}`); }
 }
 
 const COLUMN_ROLE_OPTIONS = [
@@ -711,20 +734,12 @@ const COLUMN_ROLE_OPTIONS = [
 ];
 
 function getBatchFallbackDefaults() {
-  const dCity =
-    (document.getElementById("batchDefaultCity")?.value || "").trim() ||
-    (document.getElementById("cityInput")?.value || "").trim() ||
-    "";
-  const dState =
-    (document.getElementById("batchDefaultState")?.value || "").trim() ||
-    (document.getElementById("stateInput")?.value || "").trim() ||
-    "NC";
-  const dZip = (document.getElementById("zipInput")?.value || "").trim() || "";
-  const dType =
-    document.getElementById("batchDefaultType")?.value ||
-    document.getElementById("propertyType")?.value ||
-    "residential";
-  return { dCity, dState, dZip, dType };
+  return {
+    dCity: (document.getElementById("batchDefaultCity").value || "").trim(),
+    dState: (document.getElementById("batchDefaultState").value || "").trim(),
+    dZip: "",
+    dType: document.getElementById("batchDefaultType").value || "residential",
+  };
 }
 
 function initBatchSpreadsheetHandlers() {
@@ -928,7 +943,7 @@ function renderBatchPreviewTable() {
 
   batchSheetState.mapped_rows.slice(0, 50).forEach((r) => {
     const tr = document.createElement("tr");
-    const extraInfo = [r.known_phone ? `📱 ${r.known_phone}` : "", r.notes || ""].filter(Boolean).join(" • ") || "—";
+    const extraInfo = [r.validation_error || "", r.known_phone ? `📱 ${r.known_phone}` : "", r.notes || ""].filter(Boolean).join(" • ") || "—";
     tr.innerHTML = `
       <td><span class="badge">Row ${r.row_number}</span></td>
       <td><strong>${escapeHtml(r.street || "—")}</strong></td>
@@ -947,6 +962,8 @@ async function remapCurrentBatchSheet() {
   if (!batchSheetState.header_row.length) return;
   const { dCity, dState, dZip, dType } = getBatchFallbackDefaults();
   const roles = batchSheetState.columns.map((c) => c.mapped_to);
+  const mappingVersion = ++batchMappingVersion;
+  batchMappingPending++;
 
   try {
     const res = await fetch("/api/batch/remap", {
@@ -962,92 +979,119 @@ async function remapCurrentBatchSheet() {
         default_property_type: dType,
       }),
     });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error("Mapping failed. Review the table and try again.");
     const data = await res.json();
+    if (mappingVersion !== batchMappingVersion) return;
     batchSheetState.mapped_rows = data.mapped_rows || [];
     renderBatchPreviewTable();
   } catch (e) {
-    console.error(e);
+    showToast(e.message);
+    batchSheetState.mapped_rows = [];
+  } finally { batchMappingPending--; }
+}
+
+let activeBatchJob = null;
+let batchPollTimer = null;
+let batchMappingPending = 0;
+let batchMappingVersion = 0;
+let batchSubmitting = false;
+
+async function apiJson(url, options = {}) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
   }
+  return res.json();
 }
 
 async function handleBatchRun() {
-  // If user pasted text into textarea without clicking "Read Top Row Headers" yet, parse it automatically first
-  if (!batchSheetState.mapped_rows.length) {
-    const ok = await parseBatchPastedText();
-    if (!ok || !batchSheetState.mapped_rows.length) {
-      showToast("Upload an Excel (.xlsx/.xls) or CSV file, or paste rows above first!");
-      return;
+  if (batchSubmitting) return;
+  if (batchMappingPending) { showToast("Wait for the mapping preview to finish updating."); return; }
+  if (!batchSheetState.mapped_rows.length) { showToast("Load a table and review the mapping preview first."); return; }
+  batchSubmitting = true;
+  const btn = document.getElementById("runBatchBtn");
+  btn.disabled = true;
+  try {
+    const data = await apiJson("/api/batch/jobs", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({rows:batchSheetState.mapped_rows})});
+    activeBatchJob = data.id;
+    await restoreBatchJobs(data.id);
+    await pollBatchJob();
+  } catch (error) { showToast(error.message); }
+  finally { batchSubmitting = false; if (!activeBatchJob) btn.disabled = false; }
+}
+
+async function restoreBatchJobs(selectId) {
+  try {
+    const data = await apiJson("/api/batch/jobs");
+    if (data.worker_error) showToast(data.worker_error);
+    const select = document.getElementById("batchJobSelect");
+    const previous = selectId || activeBatchJob || select.value;
+    select.replaceChildren();
+    for (const job of data.jobs) {
+      const option = document.createElement("option");
+      option.value = job.id;
+      option.textContent = `${new Date(job.created_at).toLocaleString()} • ${job.status} • ${job.id.slice(0,8)}`;
+      select.appendChild(option);
+    }
+    activeBatchJob = data.jobs.some(j => j.id === previous) ? previous : data.jobs[0]?.id;
+    if (activeBatchJob) { select.value = activeBatchJob; await pollBatchJob(); }
+  } catch (error) { showToast(`Queue unavailable: ${error.message}`); }
+}
+
+async function pollBatchJob() {
+  clearTimeout(batchPollTimer);
+  if (!activeBatchJob) return;
+  const jobId = activeBatchJob;
+  try {
+    const job = await apiJson(`/api/batch/jobs/${jobId}`);
+    if (jobId !== activeBatchJob) return;
+    document.getElementById("batchProgressBox").hidden = false;
+    const counts = Object.entries(job.counts).filter(([,n]) => n).map(([s,n]) => `${n} ${s.replaceAll('_',' ')}`).join(" • ");
+    document.getElementById("batchProgressText").textContent = `${job.status} — ${counts}. ${job.total} total rows. Closing this window does not stop the queue.`;
+    const list = document.getElementById("batchRowStatus");
+    list.replaceChildren();
+    for (const row of job.rows) {
+      const li = document.createElement("li");
+      li.textContent = `Row ${row.payload.row_number || row.position + 2}: ${row.payload.street || '(missing street)'} — ${row.status.replaceAll('_',' ')}${row.error ? ': ' + row.error : ''}`;
+      list.appendChild(li);
+    }
+    document.getElementById("batchExportLink").href = `/api/batch/jobs/${jobId}/export`;
+    document.getElementById("runBatchBtn").disabled = ["queued","running","cancelling"].includes(job.status);
+    if (["queued","running","cancelling"].includes(job.status)) batchPollTimer = setTimeout(pollBatchJob, 1800);
+    else await loadSavedLeads();
+  } catch (error) {
+    document.getElementById("batchProgressText").textContent = `Connection lost. Queue progress is saved on the server. ${error.message}`;
+    batchPollTimer = setTimeout(pollBatchJob, 5000);
+  }
+}
+
+async function batchAction(action) {
+  if (!activeBatchJob) return;
+  try {
+    await apiJson(`/api/batch/jobs/${activeBatchJob}/${action}`, {method:"POST"});
+    await pollBatchJob();
+  } catch (error) { showToast(error.message); }
+}
+
+function renderEvidence(dossier) {
+  const panel = document.getElementById("evidencePanel");
+  panel.replaceChildren();
+  function line(text) { const p = document.createElement("p"); p.textContent = text; panel.appendChild(p); return p; }
+  line(`Owner status: ${dossier.owner_status}. Confidence: ${dossier.overall_confidence}.`);
+  for (const conflict of dossier.conflicts || []) line(`Review: ${conflict}`);
+  for (const record of dossier.evidence || []) {
+    const p = line(`${record.kind} • ${record.source} • ${record.retrieved_at} • ${record.verification_status || record.status || 'unverified'}: ${record.detail || record.owner || record.number || record.address || ''}`);
+    if (record.source_url && /^https?:\/\//.test(record.source_url)) {
+      const a = document.createElement("a"); a.href = record.source_url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.textContent = " View source"; p.appendChild(a);
     }
   }
-
-  const rowsToRun = batchSheetState.mapped_rows;
-  const progBox = document.getElementById("batchProgressBox");
-  const progTxt = document.getElementById("batchProgressText");
-  const runBtn = document.getElementById("runBatchBtn");
-  progBox.hidden = false;
-  runBtn.disabled = true;
-
-  let completed = 0;
-  for (let i = 0; i < rowsToRun.length; i++) {
-    const item = rowsToRun[i];
-    if (!item.street) continue;
-
-    progTxt.textContent = `Processing Sheet Row ${item.row_number} (${i + 1} of ${rowsToRun.length}): ${item.street}, ${item.city}, ${item.state} ${item.known_owner_or_llc ? `(${item.known_owner_or_llc})` : ""}...`;
-
-    try {
-      const res = await fetch("/api/investigate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          street: item.street,
-          city: item.city,
-          state: item.state,
-          zip_code: item.zip_code || "",
-          property_type: item.property_type || "residential",
-          known_owner_or_llc: item.known_owner_or_llc || "",
-          known_phone: item.known_phone || "",
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const d = data.dossier;
-        const allPhones = [];
-        const allEmails = [];
-        (d.contacts || []).forEach((c) => {
-          (c.phones || []).forEach((p) => allPhones.push(p.number));
-          (c.emails || []).forEach((em) => allEmails.push(em));
-        });
-        await fetch("/api/leads", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            address: d.normalized_address,
-            property_type: d.property_type,
-            owner_of_record: d.owner_of_record,
-            decision_maker: d.primary_decision_maker,
-            primary_phone: d.primary_phone,
-            primary_phone_type: d.primary_phone_type || "Personal Cell / Direct",
-            all_phones: allPhones,
-            emails: allEmails,
-            mailing_address: d.tax_mailing_address,
-            portfolio_count: d.portfolio_count || 1,
-            portfolio_total_value: d.portfolio_total_value || "",
-            confidence: d.overall_confidence,
-            notes: item.notes || "",
-          }),
-        });
-        completed++;
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  runBtn.disabled = false;
-  await loadSavedLeads();
-  progTxt.textContent = `✓ Completed ${completed} of ${rowsToRun.length} spreadsheet rows! All results saved to Leads Table.`;
-  showToast(`Batch skip-trace complete (${completed} properties saved)!`);
+  for (const candidate of dossier.principal_candidates || []) line(`Principal/agent candidate: ${candidate.person || ''} • ${candidate.role || ''} • ${candidate.verification_status}`);
+  for (const phone of dossier.phone_candidates || []) line(`Phone candidate: ${phone.number} • ${phone.person || 'Person association unknown'} • ${phone.verification_status}. Do not treat as a verified owner number.`);
+  line(`AI advice: ${dossier.ai?.status || 'disabled'}. ${dossier.ai?.error || ''}`);
+  for (const hypothesis of dossier.ai?.hypotheses || []) line(`AI suggestion / unverified hypothesis: ${hypothesis}`);
 }
 
 function exportLeadsToXlsx() {
@@ -1069,7 +1113,7 @@ function exportLeadsToCsv() {
     "Property Address",
     "Type",
     "Deed Owner / LLC",
-    "Verified Decision Maker",
+    "Owner / contact (check evidence)",
     "Primary Personal Cell / Phone",
     "All Discovered Phones",
     "Portfolio Properties Count",
@@ -1086,7 +1130,7 @@ function exportLeadsToCsv() {
     l.decision_maker || "",
     l.primary_phone || "",
     (l.all_phones || []).join(" | "),
-    l.portfolio_count || 1,
+    l.portfolio_count || 0,
     l.portfolio_total_value || "",
     l.mailing_address || "",
     l.notes || "",
@@ -1095,7 +1139,7 @@ function exportLeadsToCsv() {
 
   const csvContent =
     [headers, ...rows]
-      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .map((row) => row.map((cell) => `"${safeCsvCell(cell).replace(/"/g, '""')}"`).join(","))
       .join("\n");
 
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -1114,3 +1158,5 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
+
+function safeCsvCell(value) { const s = String(value ?? ""); return /^[\s]*[=+@-]/.test(s) ? "'" + s : s; }

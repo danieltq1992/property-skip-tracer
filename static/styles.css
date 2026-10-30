@@ -1315,3 +1315,18 @@ dialog::backdrop {
   font-size: 0.85rem;
   z-index: 50;
 }
+
+/* Evidence and queue content must remain readable on narrow screens. */
+[hidden] { display: none !important; }
+#evidencePanel, #batchRowStatus { overflow-wrap: anywhere; }
+#evidencePanel a { color: #93c5fd; text-decoration: underline; }
+#batchJobSelect { max-width: 100%; margin-block: 0.75rem; }
+.action-buttons { flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .topbar { position: static; padding: 1rem; }
+  .container { padding-inline: 1rem; }
+}
+:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
