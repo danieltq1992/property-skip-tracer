@@ -19,9 +19,11 @@ Restart the development server and refresh the browser after upgrading. Existing
 | --- | --- |
 | ArcGIS World Geocoder | Automated address suggestions and address-match validation nationwide. |
 | NC OneMap county-contributed parcels | Automated point-intersection lookup only when the supplied state is NC. Street/city and any supplied APN must uniquely match. Raw record, query URL and retrieval timestamp are retained. Requires current county/deed review. |
-| Other county assessor/GIS/deed sources | Manual research; additional authorized source adapters are needed. Unsupported states never use the NC map. |
+| Other county assessor/GIS/deed sources | Browser/manual research can now be saved as source records for any supported US address. Additional automated county adapters are still needed. No state defaults are introduced. |
 | State business registries | Manual filing research. Registered agents, attorneys and officers are not automatically beneficial owners. |
-| OpenCorporates, Bizapedia, CorporationWiki, B2BHint | Manual portals/search links; no record retrieval or API integration is claimed. |
+| OpenCorporates | Optional documented company/officer API adapter, mock-tested; disabled without authorized API access. Nationwide entity search does not assume formation state. The inspected account has no API token. |
+| Regrid API | Optional documented nationwide parcel adapter, mock-tested; disabled. The offered trial was declined and no token was created. Licensed parcel results are distinct from official county confirmation. |
+| Bizapedia, CorporationWiki, B2BHint | Manual portals/search links. No automatic retrieval is claimed. |
 | Buildout, LandGlide, Regrid, Land.com, employer tools | Manual portals; authenticated accounts/authorized APIs are not connected. |
 | TruePeopleSearch, FastPeopleSearch, Spokeo and other phone portals | Manual authorized research. No automated people-search retrieval. Owner-name links for the primary tools are nationwide. |
 | Gemini | Optional evidence-based verification suggestions using `client.aio.models.generate_content`, JSON MIME type and a Pydantic schema. Installed/tested SDK: 2.31.0. AI off is the default. AI output never changes factual dossier fields. Failures are visible. |
@@ -30,9 +32,9 @@ There is **no default state or city**. Single-address and batch location fields 
 
 ## Evidence and owner priority
 
-The app separates official parcel records, corporate filings, people-search records, snippets and user hints. It preserves source URLs when available, UTC retrieval timestamps, raw parcel records, role relationships and phone/person associations. Conflicting owners require review. A phone candidate is retained regardless of its area code. Corroboration requires person/address evidence, an original record and independent underlying data lineages; number order does not raise confidence. No candidate is promoted to a primary owner phone automatically.
+The app separates official parcel records, corporate filings, people-search records, snippets and user hints. It preserves source URLs when available, UTC retrieval timestamps, raw parcel records, role relationships and phone/person associations. Conflicting owners require review. A phone candidate is retained regardless of its area code. Corroboration requires person/address evidence, an original record and independent underlying data lineages; number order does not raise confidence. A retrieved candidate never becomes a primary phone merely because it was found. A human can explicitly confirm a person-phone association through the research notebook; this remains labeled user-confirmed, not independently verified by the app.
 
-Owner contact research comes first. A manager or other secondary contact requires documented repair authority after owner research is exhausted. This build does not automate that authority investigation or provide a manual source-record ingestion editor. The launchpad and saved research notes support follow-up; corporate/phone adapters can implement the modular source interface in `research.py`. Provider-supplied records must carry real provenance; do not treat an adapter fixture as a live integration.
+Owner contact research comes first. A manager or other secondary contact requires documented repair authority after owner research is exhausted. The research notebook records inspected parcel/deed records, corporate roles, explicit ownership relationships, person-specific phones, repair authority and owner research attempts. It supports human or browser-assisted observation, with distinct labels. Primary phone nomination requires an explicit human-reviewed association and a corroborated identity address. Secondary contacts remain gated until research for that specific owner is exhausted. The launchpad and saved research notes support follow-up; corporate/phone adapters can implement the modular source interface in `research.py`. Provider-supplied records must carry real provenance; do not treat an adapter fixture as a live integration.
 
 ## Batch workflow
 
@@ -42,7 +44,7 @@ Owner contact research comes first. A manager or other secondary contact require
 4. Monitor row-level status. Closing the browser does not interrupt server work. Pause finishes the active row, then stops. Resume processes pending rows; retry requeues failed rows without rerunning successes. After a server restart, interrupted jobs are paused and the active row is returned to pending. Select the saved job and resume it.
 5. Export every row to Excel, including failures, invalid inputs, duplicates, source evidence and original hints. A completed research attempt can require manual review; it does not mean a verified phone was found.
 
-Queue concurrency is one active row with a 1.5-second interval; shared public-source requests are bounded to three. HTTP 429/503 Retry-After cooldowns suppress further requests to the throttled host; retry failed rows after service recovery. The cooldown is in-memory and resets on restart. Source calls and row work have timeouts.
+Queue concurrency is one active row with a 1.5-second interval; shared public-source requests are bounded to three. HTTP 429/503 Retry-After cooldowns suppress further requests to the throttled host; retry failed rows after service recovery. Cooldown deadlines are persisted in SQLite and survive restart. Source calls and row work have timeouts.
 
 Saved research uses deterministic property identifiers and atomic JSON writes. Retry replay returns an existing lead and preserves manual edits. It does not merge or delete older duplicate records. It also does not silently replace previously saved evidence for the same property; each batch attempt retains its own dossier in SQLite.
 
@@ -69,3 +71,15 @@ The tests use synthetic properties, mocked source responses and temporary storag
 
 API format reference: https://googleapis.github.io/python-genai/
 Parcel service metadata: https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/FeatureServer/1
+
+## Browser-assisted research without API access
+
+After researching a property, expand **Record a finding from a work site or official record**. Select the finding type and record the source URL, inspection date and relevant original wording. Add the entity, person or phone fields shown for that finding. Check the source and attestation fields carefully. Saving the finding updates the current dossier; **Save / update lead from this research** refreshes derived lead fields while keeping handwritten notes.
+
+Retract a mistaken finding from the evidence panel. Retraction removes it from current conclusions and retains the original ledger record and prior snapshots for audit. A conflicting owner remains a conflict; the app does not silently replace contrary evidence.
+
+**Copy browser-agent research brief** prepares a handoff for an assistant such as Antigravity. It does not launch an embedded browser agent or grant site access. The assistant must use permitted access, record actual source evidence and identify its submissions as `browser_assisted`. Browser-observed phone records remain candidates until human review. See `BROWSER_RESEARCH.md` for the local context/evidence API. No private account cookies, browser session tokens or hidden service endpoints are used as substitutes for API credentials.
+
+Only the source-specific, permitted browser pages your assistant can access are available. An assistant's site-safety policy may block some sites even when you can browse them personally. You can still record your own permitted manual research.
+
+New paid services and trials remain off. A normal website subscription is not assumed to grant API access. Optional source tokens can be configured under the collapsed licensed-API section of Settings; blank token fields preserve saved tokens, and status responses never return their values.

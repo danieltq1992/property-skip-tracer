@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PropTrace AI — Commercial & Residential Property Owner & Phone Skip-Tracer</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="/static/styles.css?v=2" />
+  <link rel="stylesheet" href="/static/styles.css?v=3" />
 </head>
 <body>
   <header class="topbar">
@@ -235,7 +235,7 @@
         </div>
 
         <div class="summary-box">
-          <span class="summary-label">Owner from matched official parcel record</span>
+          <span class="summary-label">Owner named in parcel evidence</span>
           <div class="summary-value-row">
             <strong id="resOwnerOfRecord" class="summary-main-value">—</strong>
             <button type="button" class="copy-mini-btn" data-copy-target="resOwnerOfRecord">Copy</button>
@@ -272,6 +272,54 @@
       </div>
 
       <section class="next-steps-box"><h3>Sources, candidates and verification status</h3><div id="evidencePanel"></div></section>
+
+      <details class="next-steps-box" id="researchNotebook">
+        <summary>Record a finding from a work site or official record</summary>
+        <p>Save the specific record you inspected. A bookmark, search snippet or agent/attorney listing alone does not prove ownership.</p>
+        <form id="evidenceForm">
+          <div class="form-row">
+            <div class="form-group flex-1"><label for="findingKind">What did you find?</label>
+              <select id="findingKind">
+                <option value="parcel_record">Parcel / deed owner record</option>
+                <option value="corporate_filing">Company officer / registered agent</option>
+                <option value="principal_relationship">Evidence of a person's ownership relationship</option>
+                <option value="phone">Phone for a specific person</option>
+                <option value="repair_authority">Documented repair approval authority</option>
+                <option value="owner_research_exhausted">Owner contact research exhausted</option>
+              </select>
+            </div>
+            <div class="form-group flex-1"><label for="findingSource">Source / work site</label>
+              <input id="findingSource" list="findingSources" required placeholder="County assessor, Spokeo…" />
+              <datalist id="findingSources"><option>County assessor</option><option>County recorder / deeds</option><option>State business registry</option><option>Spokeo</option><option>FastPeopleSearch</option><option>TruePeopleSearch</option><option>OpenCorporates</option><option>Bizapedia</option><option>LandGlide</option><option>Prospect by Buildout</option><option>Land.com</option></datalist>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-2"><label for="findingUrl">Link to the record you inspected</label><input id="findingUrl" type="url" required placeholder="https://…" /></div>
+            <div class="form-group flex-1"><label for="findingObserved">When you inspected it</label><input id="findingObserved" type="datetime-local" required /></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-1" data-finding-field="owner"><label for="findingOwner">Owner named in the parcel record</label><input id="findingOwner" /></div>
+            <div class="form-group flex-1" data-finding-field="entity"><label for="findingEntity">Property owner / entity this person is linked to</label><input id="findingEntity" /></div>
+            <div class="form-group flex-1" data-finding-field="person"><label for="findingPerson">Specific person's full name</label><input id="findingPerson" /></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-1" data-finding-field="role"><label for="findingRole">Exact role in the source</label><input id="findingRole" placeholder="Registered agent, managing member…" /></div>
+            <div class="form-group flex-1" data-finding-field="relationship"><label for="findingRelationship">Relationship supported by this record</label><select id="findingRelationship"><option value="unknown">Not established</option><option value="beneficial_owner">Beneficial owner — explicit official evidence</option><option value="registered_agent">Registered agent</option><option value="officer">Officer</option><option value="attorney">Attorney</option><option value="manager">Manager</option></select></div>
+            <div class="form-group flex-1" data-finding-field="number"><label for="findingNumber">Phone candidate (any area code)</label><input id="findingNumber" type="tel" /></div>
+          </div>
+          <div class="form-group" data-finding-field="identity"><label for="findingIdentityAddress">Corroborated identity address for this person</label><input id="findingIdentityAddress" placeholder="Use an address actually tied to this person, not an assumed property residence" /></div>
+          <div class="form-group" data-finding-field="mailing"><label for="findingMailing">Tax mailing address in the source (optional)</label><input id="findingMailing" /></div>
+          <div class="form-group"><label for="findingExcerpt">What does the original record say?</label><textarea id="findingExcerpt" required minlength="10" rows="3" placeholder="Copy the relevant wording and explain which facts it supports. For exhausted research, list the owner searches attempted and outcomes."></textarea></div>
+          <p id="findingGuidance" role="status"></p>
+          <label class="checkbox-label" data-finding-field="address"><input id="findingAddressMatch" type="checkbox" />This parcel record matches the subject property address.</label>
+          <label class="checkbox-label"><input id="findingOfficial" type="checkbox" />This is an official county/deed/state record or direct authority document.</label>
+          <label class="checkbox-label" data-finding-field="confirmPhone"><input id="findingConfirmPhone" type="checkbox" />I confirmed this number belongs to this person using the original record and the corroborated identity address.</label>
+          <label class="checkbox-label"><input id="findingAttested" type="checkbox" required />I inspected the record and this finding accurately reflects it.</label>
+          <p id="findingSaveStatus" role="status" aria-live="polite"></p>
+          <button type="submit" id="saveFindingBtn" class="btn btn-primary">Save finding and update research</button>
+        </form>
+        <div class="action-buttons"><button type="button" id="saveReviewedResearchBtn" class="btn btn-secondary">Save / update lead from this research</button><button type="button" id="copyPilotBriefBtn" class="btn btn-outline">Copy browser-agent research brief</button></div>
+      </details>
 
       <!-- Contacts & Extracted Phones Breakdown (Personal Cell First) -->
       <div class="contacts-section">
@@ -420,6 +468,14 @@
             Saved exclusively in your local <code>config.json</code> (git-ignored). AI is optional. Portal buttons open manual research tools and do not retrieve their records automatically.
           </small>
         </div>
+        <details class="next-steps-box">
+          <summary>Optional licensed APIs — off by default</summary>
+          <p>Leave these off to use your work sites manually or with a permitted browser assistant. Enabling an API uses your provider account and may consume paid credits. A saved token does not prove access.</p>
+          <label class="checkbox-label"><input type="checkbox" id="regridEnabled" />Enable Regrid nationwide parcel API</label>
+          <label for="regridToken">Regrid API token (blank keeps saved token)</label><input type="password" autocomplete="off" id="regridToken" /><p id="regridStatus"></p>
+          <label class="checkbox-label"><input type="checkbox" id="opencorporatesEnabled" />Enable OpenCorporates company / officer API</label>
+          <label for="opencorporatesToken">OpenCorporates API token (blank keeps saved token)</label><input type="password" autocomplete="off" id="opencorporatesToken" /><p id="opencorporatesStatus"></p>
+        </details>
         <div class="form-group">
           <label for="core365UrlInput">Custom Core365 | via or CRM Portal URL (Optional)</label>
           <input
@@ -431,7 +487,7 @@
       </div>
       <div class="dialog-footer">
         <button type="button" class="btn btn-ghost" data-close-dialog="settingsDialog">Skip for Now (Free Mode)</button>
-        <button type="submit" id="saveSettingsBtn" class="btn btn-primary">💾 Save API Key Locally</button>
+        <button type="submit" id="saveSettingsBtn" class="btn btn-primary">Save local settings</button>
       </div>
     </form>
   </dialog>
@@ -552,6 +608,6 @@
     </div>
   </dialog>
 
-  <script src="/static/app.js?v=2"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

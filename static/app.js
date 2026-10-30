@@ -14,6 +14,7 @@ let batchSheetState = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  initResearchNotebook();
   initPropertyToggle();
   initAddressAutocomplete();
   initModals();
@@ -224,6 +225,7 @@ function initModals() {
   const openSettings = () => {
     document.getElementById("core365UrlInput").value = customCore365Url;
     settingsDialog.showModal();
+    loadSourceSettings();
   };
 
   document.getElementById("openSettingsModalBtn").addEventListener("click", openSettings);
@@ -243,22 +245,23 @@ function initModals() {
 
   document.getElementById("settingsForm").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const key = document.getElementById("apiKeyModalInput").value.trim();
-    const c365 = document.getElementById("core365UrlInput").value.trim();
-    if (c365) {
-      customCore365Url = c365;
-      localStorage.setItem("proptrace_core365_url", c365);
-    }
-    if (key) {
-      await fetch("/api/settings/apikey", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gemini_api_key: key }),
-      });
-    }
-    settingsDialog.close();
-    await checkApiStatus();
-    showToast("Settings saved locally!");
+    const button = document.getElementById("saveSettingsBtn");
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const key = document.getElementById("apiKeyModalInput").value.trim();
+      const c365 = document.getElementById("core365UrlInput").value.trim();
+      if (key) await apiJson("/api/settings/apikey", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({gemini_api_key:key})});
+      await apiJson("/api/settings/sources", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        regrid:{enabled:document.getElementById("regridEnabled").checked,token:document.getElementById("regridToken").value.trim()},
+        opencorporates:{enabled:document.getElementById("opencorporatesEnabled").checked,token:document.getElementById("opencorporatesToken").value.trim()}
+      })});
+      if (c365) { customCore365Url=c365; localStorage.setItem("proptrace_core365_url",c365); }
+      ["apiKeyModalInput","regridToken","opencorporatesToken"].forEach(id => document.getElementById(id).value="");
+      settingsDialog.close(); await checkApiStatus(); showToast("Settings saved locally.");
+    } catch (error) { showToast(`Settings were not fully saved: ${error.message}`); }
+    finally { button.disabled=false; }
+
   });
 
   document.getElementById("runBatchBtn").addEventListener("click", handleBatchRun);
@@ -434,6 +437,8 @@ function renderDossier(dossier) {
     dossier.portfolio_total_value || dossier.assessed_value_and_acres || "See Portfolio Below";
 
   renderEvidence(dossier);
+  syncFindingSubject();
+  updateFindingFields();
 
   // Ownership Verification Chain
   document.getElementById("resStructureType").textContent =
@@ -1000,7 +1005,7 @@ async function apiJson(url, options = {}) {
   const res = await fetch(url, options);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
+    throw new Error(typeof data.detail === "string" ? data.detail : Array.isArray(data.detail) ? data.detail.map(item => item.msg).join("; ") : `Request failed (${res.status})`);
   }
   return res.json();
 }
@@ -1088,8 +1093,20 @@ function renderEvidence(dossier) {
       a.textContent = " View source"; p.appendChild(a);
     }
   }
+  for (const record of dossier.evidence || []) {
+    if (!record.ingestion_method) continue;
+    const p = line(`Recorded finding: ${record.person || record.owner || record.entity || "Research attempt"} • ${record.role || ""} • ${record.excerpt || ""}`);
+    const button=document.createElement("button"); button.type="button"; button.className="copy-mini-btn"; button.textContent="Retract this finding";
+    button.addEventListener("click", async () => {
+      button.disabled=true;
+      try { const data=await apiJson(`/api/research/evidence/${record.record_id}/retract`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(researchSubject())}); currentDossier=data.dossier; renderDossier(data.dossier); }
+      catch(error) { showToast(error.message); button.disabled=false; }
+    });
+    p.appendChild(button);
+  }
+  for (const candidate of dossier.corporate_candidates || []) line(`Company candidate: ${candidate.entity || candidate.owner || ""} • ${candidate.jurisdiction || "Jurisdiction unknown"} • ${candidate.company_number || ""}. Entity match requires review.`);
   for (const candidate of dossier.principal_candidates || []) line(`Principal/agent candidate: ${candidate.person || ''} • ${candidate.role || ''} • ${candidate.verification_status}`);
-  for (const phone of dossier.phone_candidates || []) line(`Phone candidate: ${phone.number} • ${phone.person || 'Person association unknown'} • ${phone.verification_status}. Do not treat as a verified owner number.`);
+  for (const phone of dossier.phone_candidates || []) line(`Phone: ${phone.number} • ${phone.person || 'Person association unknown'} • ${phone.verification_status}. ${phone.verification_status === "user_confirmed_person_phone" ? "Association reviewed by user; inspect original evidence." : "Candidate; not a verified owner number."}`);
   line(`AI advice: ${dossier.ai?.status || 'disabled'}. ${dossier.ai?.error || ''}`);
   for (const hypothesis of dossier.ai?.hypotheses || []) line(`AI suggestion / unverified hypothesis: ${hypothesis}`);
 }
@@ -1160,3 +1177,96 @@ function escapeHtml(str) {
 }
 
 function safeCsvCell(value) { const s = String(value ?? ""); return /^[\s]*[=+@-]/.test(s) ? "'" + s : s; }
+
+async function loadSourceSettings() {
+  const button=document.getElementById("saveSettingsBtn"); button.disabled=true;
+  try {
+    const data=await apiJson("/api/settings/sources");
+    for (const name of ["regrid","opencorporates"]) {
+      document.getElementById(name+"Enabled").checked=data[name].enabled;
+      document.getElementById(name+"Status").textContent=`${data[name].configured ? "Token configured; live access not verified" : "No token configured"} • ${data[name].enabled ? "Enabled" : "Off"}`;
+    }
+  } catch(error) { showToast(error.message); return; }
+  button.disabled=false;
+}
+
+function researchSubject() {
+  if (!currentDossier?.subject_property) throw new Error("Run research for this property first to attach source findings.");
+  const r=currentDossier.subject_property;
+  return {street:r.street,city:r.city,state:r.state,zip_code:r.zip_code || "",property_type:r.property_type || "residential"};
+}
+
+function updateFindingFields() {
+  const kind=document.getElementById("findingKind").value;
+  const fields={parcel_record:["owner","mailing","address"],corporate_filing:["entity","person","role","relationship"],
+    principal_relationship:["entity","person","role","relationship","identity"],phone:["person","number","identity","confirmPhone"],
+    repair_authority:["entity","person","role","identity"],owner_research_exhausted:["entity"]};
+  document.querySelectorAll("[data-finding-field]").forEach(el => el.hidden=!(fields[kind] || []).includes(el.dataset.findingField));
+  const guidance={parcel_record:"Copy the current legal owner from the matched parcel/deed record. Listings and tax addresses alone are not proof.",
+    corporate_filing:"Record the exact role. Agents, attorneys and officers are not automatically owners.",
+    principal_relationship:"Beneficial ownership requires explicit official evidence linking this person to this property-owning entity.",
+    phone:"A number stays a candidate unless you explicitly confirm the person association using the original record and a corroborated identity address. Area code does not limit the search.",
+    repair_authority:"This person is considered secondary only after owner contact research is documented as exhausted, and when no owner phone is established.",
+    owner_research_exhausted:"Describe the owner-first searches attempted and their outcomes. This permits documented repair-authority contacts to be considered next."};
+  document.getElementById("findingGuidance").textContent=guidance[kind];
+}
+
+function initResearchNotebook() {
+  const observed=document.getElementById("findingObserved");
+  const date=new Date(); observed.value=new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  document.getElementById("findingKind").addEventListener("change",() => {
+    document.getElementById("findingConfirmPhone").checked=false;
+    document.getElementById("findingAttested").checked=false;
+    updateFindingFields();
+  });
+  ["findingPerson","findingNumber","findingIdentityAddress"].forEach(id => document.getElementById(id).addEventListener("input",() => {
+    document.getElementById("findingConfirmPhone").checked=false;
+    document.getElementById("findingAttested").checked=false;
+  }));
+  document.getElementById("evidenceForm").addEventListener("submit",async event => {
+    event.preventDefault(); const button=document.getElementById("saveFindingBtn"); if (button.disabled) return;
+    button.disabled=true;
+    const kind=document.getElementById("findingKind").value;
+    const value=id => document.getElementById(id).value.trim();
+    const visible=id => !document.getElementById(id).closest("[data-finding-field]")?.hidden;
+    const record={kind,review_method:"human",source:value("findingSource"),source_url:value("findingUrl"),observed_at:new Date(observed.value).toISOString(),
+      excerpt:value("findingExcerpt"),official_source:document.getElementById("findingOfficial").checked,attested:document.getElementById("findingAttested").checked};
+    for (const [field,id] of Object.entries({owner:"findingOwner",entity:"findingEntity",person:"findingPerson",role:"findingRole",number:"findingNumber",mailing_address:"findingMailing",identity_address:"findingIdentityAddress"})) if (visible(id)) record[field]=value(id);
+    if (visible("findingRelationship")) record.relationship=value("findingRelationship");
+    if (visible("findingAddressMatch")) record.address_match=document.getElementById("findingAddressMatch").checked;
+    if (visible("findingConfirmPhone")) record.phone_association_confirmed=document.getElementById("findingConfirmPhone").checked;
+    const status=document.getElementById("findingSaveStatus"); status.textContent="Saving source record…";
+    try {
+      const data=await apiJson("/api/research/evidence",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({subject:researchSubject(),record})});
+      currentDossier=data.dossier; renderDossier(data.dossier); status.textContent="Finding saved. Research updated; inspect the source and confidence above.";
+      document.getElementById("findingAttested").checked=false;
+    } catch(error) { status.textContent=`Finding not saved: ${error.message}`; }
+    finally { button.disabled=false; }
+  });
+  document.getElementById("saveReviewedResearchBtn").addEventListener("click",async event => {
+    const button=event.target; if (button.disabled) return; button.disabled=true;
+    try { await apiJson("/api/research/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(researchSubject())}); await loadSavedLeads(); showToast("Saved research updated. Existing lead notes were preserved."); }
+    catch(error) { showToast(error.message); } finally { button.disabled=false; }
+  });
+  document.getElementById("copyPilotBriefBtn").addEventListener("click",async () => {
+    try {
+      const subject=researchSubject();
+      const brief=`Research this subject property owner-first using the browser and my authorized work sites: ${subject.street}, ${subject.city}, ${subject.state} ${subject.zip_code}. Do not assume the property address is the owner's residence or filter phones by area code. Inspect actual parcel/deed records, then entity ownership evidence, then person-specific phone records. Registered agents and attorneys are not presumed owners. Record exact source URLs, observed dates, excerpts and uncertainties. Stop at access controls. PropTrace provides a local context and evidence API documented at http://127.0.0.1:8765/docs and /api/research/context. Submit observed records as review_method=browser_assisted; do not claim human verification or confirm a primary phone on my behalf. Property context: ${JSON.stringify(subject)}. Current evidence: ${JSON.stringify(currentDossier.evidence || [])}`;
+      await navigator.clipboard.writeText(brief); showToast("Browser-agent research brief copied. Paste it into your chosen assistant.");
+    } catch(error) { showToast(error.message); }
+  });
+  updateFindingFields();
+}
+
+let findingSubjectSignature="";
+function syncFindingSubject() {
+  if (!currentDossier?.subject_property) return;
+  const row=currentDossier.subject_property;
+  const signature=[row.street,row.city,row.state].join("|");
+  if (signature === findingSubjectSignature) return;
+  findingSubjectSignature=signature;
+  document.getElementById("evidenceForm").reset();
+  const date=new Date();
+  document.getElementById("findingObserved").value=new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  document.getElementById("findingSaveStatus").textContent="";
+}

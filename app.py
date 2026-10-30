@@ -48,6 +48,9 @@ except ImportError:
 
 from research import investigate, GeminiAdvisor, property_key, validation_error, public_get
 from jobs import JobStore, WorkerLock, safe_cell
+from evidence_store import EvidenceStore, ReviewedRecord
+from rate_limits import RateLimitStore
+import research
 
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
@@ -65,6 +68,8 @@ async def lifespan(app):
     try:
         store = JobStore(JOB_FILE)
         store.recover()
+        app.state.evidence = EvidenceStore(JOB_FILE)
+        research.RATE_LIMIT_STORE = RateLimitStore(JOB_FILE)
     except Exception:
         lock.release()
         raise
@@ -87,6 +92,7 @@ async def lifespan(app):
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        research.RATE_LIMIT_STORE = None
         lock.release()
 
 
@@ -635,8 +641,22 @@ def street_key_address(address):
     return re.sub(r"[^a-z0-9-]", "", address.casefold())
 
 
-async def research_row(row):
-    return await investigate(row)
+def provider_config():
+    config = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+    providers = config.get("providers", {})
+    for name, env in (("regrid", "REGRID_API_TOKEN"), ("opencorporates", "OPENCORPORATES_API_TOKEN")):
+        item = dict(providers.get(name, {}))
+        item["token"] = os.environ.get(env) or item.get("token", "")
+        providers[name] = item
+    return providers
+
+
+async def research_row(row, advisor=None):
+    records = app.state.evidence.records(row)
+    sources = research.PublicSources(provider_config(), records)
+    dossier = await investigate(row, sources=sources, advisor=advisor)
+    app.state.evidence.snapshot(row, dossier)
+    return dossier
 
 
 def save_batch_result(dossier, row):
@@ -1082,6 +1102,113 @@ async def get_status():
     }
 
 
+class ProviderSetting(BaseModel):
+    enabled: bool = False
+    token: str = Field(default="", max_length=1000)
+
+
+class ProviderSettings(BaseModel):
+    regrid: ProviderSetting
+    opencorporates: ProviderSetting
+
+
+@app.get("/api/settings/sources")
+async def get_source_settings():
+    config = provider_config()
+    return {name: {"enabled": bool(config.get(name, {}).get("enabled")),
+        "configured": bool(config.get(name, {}).get("token"))} for name in ("regrid","opencorporates")}
+
+
+@app.post("/api/settings/sources")
+async def save_source_settings(req: ProviderSettings):
+    with LEADS_LOCK:
+        config = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+        providers = config.setdefault("providers", {})
+        for name, value in req.model_dump().items():
+            previous = providers.setdefault(name, {})
+            previous["enabled"] = value["enabled"]
+            if value["token"].strip():
+                previous["token"] = value["token"].strip()
+        atomic_json(CONFIG_FILE, config)
+    return {"status": "saved"}
+
+
+class SubjectRequest(BaseModel):
+    street: str
+    city: str
+    state: str
+    zip_code: str = ""
+    property_type: str = "residential"
+
+    def row(self):
+        row = self.model_dump()
+        row["state"] = normalize_state_abbr(row["state"])
+        error = validation_error(row)
+        if error:
+            raise HTTPException(400, error)
+        return row
+
+
+class EvidenceRequest(BaseModel):
+    subject: SubjectRequest
+    record: ReviewedRecord
+
+
+def recompute_reviewed(row):
+    prior = app.state.evidence.latest(row) or {}
+    prior_records = [r for r in prior.get("evidence", []) if r.get("ingestion_method") not in ("manual_research","browser_assisted")]
+    dossier = research.assemble(row, prior_records + app.state.evidence.records(row))
+    dossier["ai"] = {"status": "disabled", "hypotheses": []}
+    app.state.evidence.snapshot(row, dossier)
+    return dossier
+
+
+@app.post("/api/research/evidence")
+async def add_research_evidence(req: EvidenceRequest):
+    row = req.subject.row()
+    app.state.evidence.add(row, req.record.record())
+    return {"dossier": recompute_reviewed(row)}
+
+
+@app.post("/api/research/context")
+async def research_context(req: SubjectRequest):
+    row = req.row()
+    dossier = app.state.evidence.latest(row)
+    return {"subject":row, "dossier":dossier, "instructions":
+        "Inspect permitted source pages. Record URLs, dates, original wording and person relationships. "
+        "Submit /api/research/evidence with review_method=browser_assisted. Never claim a human reviewed it. "
+        "Stop at login or access restrictions that require user action. AI text is not a source record.",
+        "record_schema":ReviewedRecord.model_json_schema()}
+
+
+@app.post("/api/research/evidence/{record_id}/retract")
+async def retract_research_evidence(record_id: str, req: SubjectRequest):
+    row = req.row()
+    if not app.state.evidence.retract(row, record_id):
+        raise HTTPException(404, "Active record not found for this property")
+    return {"dossier": recompute_reviewed(row)}
+
+
+@app.post("/api/research/save")
+async def save_reviewed_research(req: SubjectRequest):
+    row = req.row()
+    dossier = app.state.evidence.latest(row)
+    if not dossier:
+        raise HTTPException(404, "No research found for this property")
+    # Explicit update of derived research fields; handwritten notes stay intact.
+    with LEADS_LOCK:
+        leads = load_saved_leads()
+        for lead in leads:
+            if lead.get("property_key") == property_key(row) or street_key_address(lead.get("address", "")) == street_key_address(dossier["normalized_address"]):
+                lead.update(owner_of_record=dossier["owner_of_record"],decision_maker=dossier["primary_decision_maker"],
+                    primary_phone=dossier["primary_phone"],confidence=dossier["overall_confidence"],evidence=dossier["evidence"],dossier=dossier,
+                    updated_at=datetime.now().isoformat())
+                write_saved_leads(leads)
+                return {"status":"updated", "lead":lead}
+        save_batch_result(dossier, row)
+    return {"status":"saved"}
+
+
 @app.post("/api/settings/apikey")
 async def update_api_key(req: ApiKeyRequest):
     save_api_key(req.gemini_api_key)
@@ -1104,7 +1231,7 @@ async def investigate_property(req: InvestigateRequest):
         raise HTTPException(400, error)
     key = req.gemini_api_key or get_saved_api_key()
     advisor = GeminiAdvisor(key, req.model) if key and req.model != "disabled" else None
-    dossier = await investigate(row, advisor=advisor)
+    dossier = await research_row(row, advisor=advisor)
     if req.model != "disabled" and not key:
         dossier["ai"] = {"status": "unavailable", "hypotheses": [], "error": "AI was selected but no API key is configured."}
     links = build_tool_links(street=row["street"], city=row["city"], state=row["state"], zip_code=row["zip_code"],

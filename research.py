@@ -15,13 +15,15 @@ PARCEL = 'https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/Feat
 US_STATES = set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split())
 SOURCE_SLOTS = asyncio.Semaphore(3)
 SOURCE_COOLDOWNS = {}
+RATE_LIMIT_STORE = None
 
 
 async def public_get(client, url, **kwargs):
     """Honor throttling without repeatedly sending denied requests."""
     host = httpx.URL(url).host
     async with SOURCE_SLOTS:
-        if SOURCE_COOLDOWNS.get(host, 0) > time.monotonic():
+        if (SOURCE_COOLDOWNS.get(host, 0) > time.monotonic()
+                or RATE_LIMIT_STORE and RATE_LIMIT_STORE.deadline(host) > time.time()):
             raise ValueError('Source rate limit cooldown active')
         response = await client.get(url, **kwargs)
         if response.status_code in (429, 503):
@@ -34,6 +36,8 @@ async def public_get(client, url, **kwargs):
                 except (ValueError, TypeError):
                     seconds = 60
             SOURCE_COOLDOWNS[host] = time.monotonic() + max(1, seconds)
+            if RATE_LIMIT_STORE:
+                RATE_LIMIT_STORE.hold(host, max(1, seconds))
         response.raise_for_status()
         return response
 
@@ -45,6 +49,9 @@ def now():
 def street_key(value):
     # Conservative matching: ambiguous abbreviations require manual review.
     value = re.sub(r'\b(suite|ste|unit|apt)\b', 'unit', value.lower())
+    aliases = {'street':'st','avenue':'ave','road':'rd','boulevard':'blvd','drive':'dr',
+               'lane':'ln','court':'ct','highway':'hwy','north':'n','south':'s','east':'e','west':'w'}
+    value = re.sub(r'\b[a-z]+\b', lambda m: aliases.get(m[0], m[0]), value)
     return re.sub(r'[^a-z0-9-]', '', value)
 
 
@@ -66,7 +73,7 @@ def evidence(kind, source, url='', **facts):
     return dict(kind=kind, source=source, source_url=url, retrieved_at=now(), **facts)
 
 
-class PublicSources:
+class CountySources:
     """Public geocoding and NC parcel adapter. No people-search scraping."""
     async def retrieve(self, row):
         records = []
@@ -122,6 +129,26 @@ class PublicSources:
         return records
 
 
+class PublicSources(CountySources):
+    def __init__(self, config=None, reviewed_records=None):
+        self.config = config or {}
+        self.reviewed_records = reviewed_records or []
+
+    async def retrieve(self, row):
+        from providers import LicensedProviders
+        records = await super().retrieve(row)
+        records += self.reviewed_records
+        providers = LicensedProviders(self.config)
+        if not any(r['kind'] in ('official_parcel','reviewed_parcel') and r.get('address_match') for r in records):
+            # A unique geocode must precede any licensed parcel selection.
+            if any(r['kind'] == 'geocode' and r.get('status') == 'matched' for r in records):
+                records += await providers.parcels(row)
+        dossier = assemble(row, records)
+        if dossier['is_corporate_or_llc']:
+            records += await providers.companies(dossier['owner_of_record'])
+        return records
+
+
 class Advisor(Protocol):
     async def advise(self, records: list) -> dict: ...
 
@@ -157,12 +184,20 @@ def assemble(row, records):
     if row.get('known_phone'):
         records.append(evidence('phone', 'User input', number=row['known_phone'], person='',
             verification_status='unverified', detail='Person association not established'))
-    parcels = [r for r in records if r['kind'] == 'official_parcel' and r.get('address_match') and r.get('owner')]
+    parcels = [r for r in records if r['kind'] in ('official_parcel','reviewed_parcel','licensed_parcel') and r.get('address_match') and r.get('owner')]
+    parcels.sort(key=lambda r: 0 if r['kind'] == 'official_parcel' else 1 if r['kind'] == 'reviewed_parcel'
+        and r.get('official_source') and r.get('review_method','human') == 'human' else 2
+        if r['kind'] == 'reviewed_parcel' and r.get('review_method','human') == 'human' else 3)
     owners = {r['owner'].casefold() for r in parcels}
     conflicts = []
     if len(owners) > 1:
         conflicts.append('Conflicting official owner records; manual review required.')
     owner = parcels[0]['owner'] if len(owners) == 1 else ''
+    owner_status = ('browser_observed_parcel_requires_review' if parcels[0].get('review_method') == 'browser_assisted'
+        else 'user_reviewed_official_source' if parcels[0]['kind'] == 'reviewed_parcel' and parcels[0].get('official_source')
+        else 'user_reviewed_source' if parcels[0]['kind'] == 'reviewed_parcel'
+        else 'licensed_parcel_record_requires_county_check' if parcels[0]['kind'] == 'licensed_parcel'
+        else 'official_parcel_record') if owner else 'unresolved'
     web_owners = {r['owner'].casefold() for r in records if r.get('owner') and r['kind'] in ('search_snippet', 'people_search')}
     if len(web_owners | owners) > 1:
         conflicts.append('Owner names differ across sources. Search snippets do not establish legal ownership.')
@@ -172,9 +207,30 @@ def assemble(row, records):
     # Officers and agents are evidence of roles, never proof of beneficial ownership.
     contacts = []
     if owner and not corporate:
-        contacts.append(dict(full_name=owner, role='Legal owner in parcel record; currency requires review',
-            is_primary_decision_maker=True, verification_evidence='Matched official parcel record',
+        contacts.append(dict(full_name=owner, role='Owner candidate in licensed parcel data' if owner_status == 'licensed_parcel_record_requires_county_check' else 'Owner in parcel evidence; inspect provenance and currency',
+            is_primary_decision_maker=True, relationship='owner_record', verification_evidence='Matched parcel record; inspect provenance and currency',
             mailing_or_home_address=parcels[0].get('mailing_address',''), phones=[], emails=[]))
+    def same_entity(record):
+        return re.sub(r'[^a-z0-9]', '', record.get('entity','').casefold()) == re.sub(r'[^a-z0-9]', '', owner.casefold())
+
+    if owner and corporate:
+        for r in records:
+            if (r['kind'] == 'principal_relationship' and same_entity(r) and r.get('official_source')
+                    and r.get('attested') and r.get('review_method', 'human') == 'human' and r.get('relationship') == 'beneficial_owner' and r.get('person')):
+                contacts.append(dict(full_name=r['person'],role='Beneficial owner — user-reviewed official source',
+                    relationship='beneficial_owner',is_primary_decision_maker=True,verification_evidence=r.get('excerpt',''),
+                    mailing_or_home_address=r.get('identity_address',''),phones=[],emails=[]))
+    exhausted = any(r['kind'] == 'owner_research_exhausted' and r.get('attested') and same_entity(r) for r in records)
+    secondary = [r for r in records if r['kind'] == 'repair_authority' and same_entity(r)
+        and r.get('attested') and r.get('review_method', 'human') == 'human' and r.get('official_source') and r.get('person')]
+    owner_names = {c['full_name'].casefold() for c in contacts}
+    confirmed_owner_phone = any(r['kind'] == 'phone' and r.get('attested') and r.get('review_method', 'human') == 'human' and r.get('phone_association_confirmed')
+        and r.get('identity_address') and r.get('person','').casefold() in owner_names for r in records)
+    if exhausted and not confirmed_owner_phone:
+        for r in secondary:
+            contacts.append(dict(full_name=r['person'],role='Secondary contact — documented repair authority',
+                relationship='secondary_authorized',is_primary_decision_maker=False,verification_evidence=r.get('excerpt',''),
+                mailing_or_home_address=r.get('identity_address',''),phones=[],emails=[]))
     phones = []
     for record in records:
         if record['kind'] != 'phone':
@@ -186,31 +242,47 @@ def assemble(row, records):
                 and record.get('original_record') and len(set(record.get('independent_lineages', []))) >= 2):
             p['verification_status'] = 'corroborated_person_phone'
             p['confidence'] = 'Corroborated; review before outreach'
+        if record.get('attested') and record.get('review_method', 'human') == 'human' and record.get('phone_association_confirmed') and record.get('identity_address'):
+            p['verification_status'] = 'user_confirmed_person_phone'
+            p['confidence'] = 'User reviewed; not independently verified by app'
         phones.append(p)
         for contact in contacts:
             if record.get('person', '').casefold() == contact['full_name'].casefold():
                 contact['phones'].append(p)
+    chosen_contact, chosen_phone = '', ''
+    owner_contacts = [c for c in contacts if c.get('relationship') != 'secondary_authorized']
+    secondary_contacts = [c for c in contacts if c.get('relationship') == 'secondary_authorized']
+    for c in owner_contacts + secondary_contacts:
+        confirmed = [p for p in c['phones'] if p['verification_status'] == 'user_confirmed_person_phone']
+        if confirmed and not conflicts and owner_status not in ('licensed_parcel_record_requires_county_check','browser_observed_parcel_requires_review','user_reviewed_source'):
+            chosen_contact, chosen_phone = c['full_name'], confirmed[0]['number']
+            break
+    if not chosen_contact and owner_contacts:
+        chosen_contact = owner_contacts[0]['full_name']
     steps = ['Confirm current deed/assessor ownership and parcel address before outreach.',
         'For entities, inspect official state filings; registered agents and attorneys are not presumed owners.',
         'Research the identified owner nationwide using authorized phone tools; corroborate person and address, not area code.',
         'Consider a secondary contact only after owner research is exhausted and repair authority is documented.']
     return dict(normalized_address=f"{row['street']}, {row['city']}, {row['state']} {row.get('zip_code','')}".strip(),
         property_type=row.get('property_type','residential'), owner_of_record=owner,
-        owner_status='official_parcel_record' if owner else 'unresolved',
+        owner_status=owner_status,
+        owner_contact_status='user_confirmed_phone' if confirmed_owner_phone else 'research_exhausted' if exhausted else 'research_required',
+        secondary_candidates=secondary, subject_property=dict(row),
         is_corporate_or_llc=corporate, corporate_entity_name=owner if corporate else '', state_of_formation='',
         parcel_apn=parcels[0].get('apn','') if owner else '', county_and_state=parcels[0].get('county','') if owner else '',
         tax_mailing_address=parcels[0].get('mailing_address','') if owner else '',
-        primary_decision_maker=owner if owner and not corporate else '', primary_phone='', primary_phone_type='No verified primary phone',
-        decision_maker_role_and_authority='Legal owner in parcel record' if owner and not corporate else 'Human ownership unresolved',
-        decision_maker_verification_proof='Official parcel evidence requires a current deed/assessor check.' if owner else 'No matched official ownership evidence retrieved.',
+        primary_decision_maker=chosen_contact, primary_phone=chosen_phone,
+        primary_phone_type='User-confirmed person association — review source' if chosen_phone else 'No verified primary phone',
+        decision_maker_role_and_authority=next((c['role'] for c in contacts if c['full_name'] == chosen_contact), 'Human ownership unresolved'),
+        decision_maker_verification_proof='Inspect the source records and review method below; parcel currency and ownership require confirmation.' if owner else 'No matched ownership evidence retrieved.',
         ownership_structure_type='Entity; principals require research' if corporate else 'Ownership record review',
         shell_layers_pierced=[], contacts=contacts, principal_candidates=principals, phone_candidates=phones,
-        corporate_candidates=[r for r in records if r['kind'] in ('user_hint','search_snippet') and r.get('owner')],
+        corporate_candidates=[r for r in records if r['kind'] in ('user_hint','search_snippet','corporate_candidate')],
         evidence=records, conflicts=conflicts, overall_confidence='Manual review required' if conflicts else 'Needs verification',
         portfolio_count=0, portfolio_total_value='', portfolio_summary='Portfolio ownership has not been verified.', other_properties=[],
-        agent_1_property_findings='Matched official parcel record; verify currency.' if owner else 'Ownership unresolved. Inspect source status below.',
-        agent_2_entity_findings='Corporate filings and beneficial ownership require manual authorized research.',
-        agent_3_phone_findings=f'{len(phones)} phone candidate(s); no verified primary phone. Manual authorized research required.',
+        agent_1_property_findings=f'Owner evidence: {owner_status}. Verify source and currency.' if owner else 'Ownership unresolved. Inspect source status below.',
+        agent_2_entity_findings=f'{len(principals)} registry role candidate(s). Beneficial ownership requires explicit source evidence.',
+        agent_3_phone_findings=f'{len(phones)} phone candidate(s). ' + ('Primary association confirmed by user research; inspect evidence.' if chosen_phone else 'No confirmed primary phone.'),
         recommended_next_steps=steps)
 
 
